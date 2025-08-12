@@ -3,13 +3,14 @@ chatbot:
   identity:
     gender: "female"
     age: 23
-    language: "en-US"   # default language code
+    language: "en-US"
   personality:
     style: "warm, playful, concise"
     boundaries: "SFW, respectful"
 
 llm:
   provider: "ollama"
+  base_url: "http://localhost:11434"
   model: "artifish/llama3.2-uncensored"
   temperature: 0.7
   max_tokens: 512
@@ -17,3 +18,8 @@ llm:
 
 prompt:
   system_template: "src/bot/prompt/system_prompt.txt"
+
+logging:
+  dir: "logs"
+  session_prefix: "chat"
+  format: "jsonl"
