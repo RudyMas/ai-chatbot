@@ -10,7 +10,7 @@ chatbot:
 
 llm:
   provider: "ollama"
-  model: "llama3.2:3b"
+  model: "artifish/llama3.2-uncensored"
   temperature: 0.7
   max_tokens: 512
   request_timeout: 60
