@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
 import yaml
 
 @dataclass
@@ -31,7 +33,7 @@ class AppConfig:
     chatbot: ChatbotConfig
     llm: LLMConfig
 
-def load_config(path: str | Path) -> AppConfig:
+def load_config(path: str | Path) -> tuple[AppConfig, Any]:
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
 
     cb = data["chatbot"]
@@ -54,4 +56,10 @@ def load_config(path: str | Path) -> AppConfig:
         temperature=float(llm["temperature"]),
         max_tokens=int(llm["max_tokens"]),
     )
-    return AppConfig(chatbot=chatbot, llm=llm_cfg)
+    return AppConfig(chatbot=chatbot, llm=llm_cfg), data
+
+def get_system_template_path(cfg_file: Path, data: dict) -> Path:
+    # resolve relative to repo root based on cfg_file position
+    rel = data.get("prompt", {}).get("system_template", "src/bot/prompt/system_prompt.txt")
+    base = cfg_file.parent.parent  # config/ -> repo root
+    return (base / rel).resolve()
