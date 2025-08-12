@@ -30,3 +30,10 @@ rag:
   chunk_messages: 6                    # summarize every N messages (user+assistant count)
   summary_max_words: 120               # keep summaries tiny
   tags: ["session-summary"]            # default tags for RAG entries
+
+retriever:
+  enabled: true
+  store_path: "data/rag/store.jsonl"
+  top_k: 3
+  max_note_words: 60
+  require_tags: []      # e.g. ["session-summary"] to filter, or leave empty
