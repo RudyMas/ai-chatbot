@@ -23,3 +23,10 @@ logging:
   dir: "logs"
   session_prefix: "chat"
   format: "jsonl"
+
+rag:
+  enabled: true
+  store_path: "data/rag/store.jsonl"   # where summaries go
+  chunk_messages: 6                    # summarize every N messages (user+assistant count)
+  summary_max_words: 120               # keep summaries tiny
+  tags: ["session-summary"]            # default tags for RAG entries

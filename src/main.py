@@ -25,18 +25,20 @@ def main():
     print(bot.whoami())
     print()
 
-    # Logging setup (optional; uses config if present)
+    # Logging (file transcript)
     log_cfg_raw = raw.get("logging", {}) if isinstance(raw, dict) else {}
     logs_dir = log_cfg_raw.get("dir", "logs")
     prefix = log_cfg_raw.get("session_prefix", "chat")
     log_cfg = LogConfig(directory=(Path(__file__).parents[1] / logs_dir), session_prefix=prefix)
     logger = TranscriptLogger(log_cfg, session_name=args.session)
 
+    # RAG config
+    rag_cfg = raw.get("rag", {}) if isinstance(raw, dict) else {}
+
     if args.ask:
-        chat_once(app_cfg, str(template_path), args.ask, logger=logger)
+        chat_once(app_cfg, str(template_path), args.ask, logger=logger, rag_cfg=rag_cfg)
     else:
-        # default to interactive chat if --ask not provided
-        chat_loop(app_cfg, str(template_path), logger=logger)
+        chat_loop(app_cfg, str(template_path), logger=logger, rag_cfg=rag_cfg, session_name=args.session)
 
 if __name__ == "__main__":
     main()
