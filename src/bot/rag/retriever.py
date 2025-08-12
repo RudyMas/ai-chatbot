@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-from typing import List, Dict, Iterable
+from typing import List, Dict, Iterable, Optional
 import json
 import re
 
@@ -25,7 +25,7 @@ def _score(query: str, text: str) -> float:
     if not t:
         return 0.0
     overlap = sum(1 for w in t if w in q)
-    return overlap / (len(t) ** 0.5)  # simple normalization
+    return overlap / (len(t) ** 0.5)
 
 def _trim_words(text: str, max_words: int) -> str:
     ws = text.strip().split()
@@ -34,9 +34,19 @@ def _trim_words(text: str, max_words: int) -> str:
     return " ".join(ws[:max_words]) + " …"
 
 class SimpleRetriever:
-    def __init__(self, store_path: str | Path, require_tags: Iterable[str] | None = None):
+    def __init__(
+        self,
+        store_path: str | Path,
+        require_tags: Iterable[str] | None = None,
+        user_name: Optional[str] = None,
+        require_user_match: bool = False,
+        global_tags: Iterable[str] | None = None,
+    ):
         self.path = Path(store_path)
         self.require_tags = set(require_tags or [])
+        self.user_name = user_name
+        self.require_user_match = require_user_match
+        self.global_tags = set(global_tags or [])
         self.docs: List[Dict] = []
         self._loaded = False
 
@@ -56,10 +66,22 @@ class SimpleRetriever:
                     obj = json.loads(line)
                 except Exception:
                     continue
+                # tag filter
                 if self.require_tags:
                     tags = set(obj.get("tags", []))
                     if not self.require_tags.issubset(tags):
                         continue
+                # user scoping
+                if self.require_user_match:
+                    note_user = (obj.get("user_name") or "").strip()
+                    tags = set(obj.get("tags", []))
+                    is_global = bool(self.global_tags and (self.global_tags & tags))
+                    if not is_global:
+                        if not self.user_name:
+                            # if we require match but don't know the user, skip
+                            continue
+                        if note_user.lower() != self.user_name.lower():
+                            continue
                 if "text" in obj:
                     self.docs.append(obj)
         self._loaded = True

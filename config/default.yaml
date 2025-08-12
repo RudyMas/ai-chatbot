@@ -33,6 +33,8 @@ rag:
   chunk_messages: 6
   summary_max_words: 120
   tags: ["session-summary"]
+  require_user_match: true
+  global_tags: ["global"]
 
 retriever:
   enabled: true

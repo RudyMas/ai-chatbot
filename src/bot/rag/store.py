@@ -2,7 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 class RAGStore:
     def __init__(self, path: str | Path):
@@ -20,11 +20,12 @@ class RAGStore:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     @staticmethod
-    def make_summary_entry(session: str, text: str, tags: List[str]) -> Dict[str, Any]:
+    def make_summary_entry(session: str, user_name: str, text: str, tags: List[str]) -> Dict[str, Any]:
         return {
             "id": f"{session}-{int(datetime.utcnow().timestamp())}",
             "type": "note",
             "session": session,
+            "user_name": user_name,     # <— who this note belongs to
             "tags": tags,
             "text": text.strip(),
         }
