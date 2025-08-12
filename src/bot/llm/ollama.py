@@ -13,6 +13,7 @@ def render_system_prompt(cfg: AppConfig, template_path: str) -> str:
         "language": cfg.chatbot.identity.language,
         "style": cfg.chatbot.personality.style,
         "boundaries": cfg.chatbot.personality.boundaries,
+        "user_name": cfg.user.name,
     }
     for k, v in ctx.items():
         t = t.replace(f"{{{{{k}}}}}", v)
@@ -26,7 +27,7 @@ def generate(prompt: str, cfg: AppConfig, system_template_path: str) -> str:
         "model": cfg.llm.model,
         "prompt": prompt,
         "system": system_text,
-        "stream": False,  # IMPORTANT: request a single JSON response
+        "stream": False,
         "options": {
             "temperature": cfg.llm.temperature,
             "num_predict": cfg.llm.max_tokens

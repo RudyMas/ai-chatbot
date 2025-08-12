@@ -8,6 +8,9 @@ chatbot:
     style: "warm, playful, concise"
     boundaries: "SFW, respectful"
 
+user:
+  name: "Random User"
+
 llm:
   provider: "ollama"
   base_url: "http://localhost:11434"
@@ -26,14 +29,14 @@ logging:
 
 rag:
   enabled: true
-  store_path: "data/rag/store.jsonl"   # where summaries go
-  chunk_messages: 6                    # summarize every N messages (user+assistant count)
-  summary_max_words: 120               # keep summaries tiny
-  tags: ["session-summary"]            # default tags for RAG entries
+  store_path: "data/rag/store.jsonl"
+  chunk_messages: 6
+  summary_max_words: 120
+  tags: ["session-summary"]
 
 retriever:
   enabled: true
   store_path: "data/rag/store.jsonl"
   top_k: 3
   max_note_words: 60
-  require_tags: []      # e.g. ["session-summary"] to filter, or leave empty
+  require_tags: []

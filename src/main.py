@@ -2,7 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 import argparse
 
-from bot.config import load_config, get_system_template_path
+from bot.config import load_config, get_system_template_path, AppConfig, UserConfig
 from bot.chatbot import Chatbot
 from bot.cli import chat_once, chat_loop
 from bot.logger import TranscriptLogger, LogConfig
@@ -13,24 +13,30 @@ def parse_args():
     group.add_argument("--ask", help="Ask a single question and print the answer")
     group.add_argument("--chat", action="store_true", help="Start interactive chat loop")
     p.add_argument("--session", help="Optional session name for logging", default=None)
+    p.add_argument("--user", help="Override username (default from config)", default=None)
     return p.parse_args()
 
 def main():
     args = parse_args()
     cfg_path = Path(__file__).parents[1] / "config" / "default.yaml"
     app_cfg, raw = load_config(cfg_path)
+
+    # Allow runtime override of username
+    if args.user:
+        app_cfg.user = UserConfig(name=args.user)
+
     template_path = get_system_template_path(cfg_path, raw)
 
     bot = Chatbot(app_cfg)
     print(bot.whoami())
-    print()
+    print(f"Talking to: {app_cfg.user.name}\n")
 
     # Logging (file transcript)
     log_cfg_raw = raw.get("logging", {}) if isinstance(raw, dict) else {}
     logs_dir = log_cfg_raw.get("dir", "logs")
     prefix = log_cfg_raw.get("session_prefix", "chat")
     log_cfg = LogConfig(directory=(Path(__file__).parents[1] / logs_dir), session_prefix=prefix)
-    logger = TranscriptLogger(log_cfg, session_name=args.session)
+    logger = TranscriptLogger(log_cfg, session_name=args.session, user_name=app_cfg.user.name)
 
     # RAG config
     rag_cfg = raw.get("rag", {}) if isinstance(raw, dict) else {}

@@ -20,6 +20,10 @@ class ChatbotConfig:
     personality: ChatbotPersonality
 
 @dataclass
+class UserConfig:
+    name: str
+
+@dataclass
 class LLMConfig:
     provider: str
     base_url: str
@@ -31,6 +35,7 @@ class LLMConfig:
 @dataclass
 class AppConfig:
     chatbot: ChatbotConfig
+    user: UserConfig
     llm: LLMConfig
 
 def load_config(path: str | Path):
@@ -39,6 +44,7 @@ def load_config(path: str | Path):
 
     cb = data["chatbot"]
     llm = data["llm"]
+    user = data.get("user", {}) or {}
 
     identity = ChatbotIdentity(
         name=cb["name"],
@@ -52,6 +58,8 @@ def load_config(path: str | Path):
     )
     chatbot = ChatbotConfig(identity=identity, personality=personality)
 
+    user_cfg = UserConfig(name=user.get("name", "User"))
+
     llm_cfg = LLMConfig(
         provider=llm["provider"],
         base_url=llm.get("base_url", "http://localhost:11434"),
@@ -61,7 +69,7 @@ def load_config(path: str | Path):
         request_timeout=int(llm.get("request_timeout", 60)),
     )
 
-    return AppConfig(chatbot=chatbot, llm=llm_cfg), data
+    return AppConfig(chatbot=chatbot, user=user_cfg, llm=llm_cfg), data
 
 def get_system_template_path(cfg_file: Path, data: dict) -> Path:
     rel = data.get("prompt", {}).get("system_template", "src/bot/prompt/system_prompt.txt")
