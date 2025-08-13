@@ -2,7 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 class RAGStore:
     def __init__(self, path: str | Path):
@@ -25,7 +25,18 @@ class RAGStore:
             "id": f"{session}-{int(datetime.utcnow().timestamp())}",
             "type": "note",
             "session": session,
-            "user_name": user_name,     # <— who this note belongs to
+            "user_name": user_name,
+            "tags": tags,
+            "text": text.strip(),
+        }
+
+    @staticmethod
+    def make_fact_entry(session: str, user_name: str, text: str, tags: List[str]) -> Dict[str, Any]:
+        return {
+            "id": f"{session}-fact-{int(datetime.utcnow().timestamp())}",
+            "type": "fact",
+            "session": session,
+            "user_name": user_name,
             "tags": tags,
             "text": text.strip(),
         }
