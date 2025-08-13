@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from bot.config import load_config, get_system_template_path, UserConfig
-from bot.llm.ollama import generate, generate_chat
+from bot.llm.ollama import generate_chat
 from bot.logger import TranscriptLogger, LogConfig
 from bot.rag.store import RAGStore
 from bot.rag.retriever import SimpleRetriever
@@ -18,23 +18,34 @@ from server.state import state, session_buffers, SessionBuffer
 # ---------- App bootstrap ----------
 ROOT = Path(__file__).parents[2]
 CFG_PATH = ROOT / "config" / "default.yaml"
+
 app = FastAPI()
+
+# serve web/ directory for static files
 WEB_DIR = ROOT / "web"
 WEB_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
+# Load config & setup
 app_cfg, raw_cfg = load_config(CFG_PATH)
 TEMPLATE_PATH = get_system_template_path(CFG_PATH, raw_cfg)
 
+# logging setup
 logs_dir = raw_cfg.get("logging", {}).get("dir", "logs")
 prefix = raw_cfg.get("logging", {}).get("session_prefix", "chat")
 LOG_DIR = ROOT / logs_dir
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+# rag setup
 rag_cfg = raw_cfg.get("rag", {}) if isinstance(raw_cfg, dict) else {}
 store_path = rag_cfg.get("store_path", "data/rag/store.jsonl")
 STORE = RAGStore(ROOT / store_path)
 
+# chat settings
+chat_cfg = raw_cfg.get("chat", {}) if isinstance(raw_cfg, dict) else {}
+history_max_messages = int(chat_cfg.get("history_max_messages", 8))
+
+# ---------- Models ----------
 class ChatIn(BaseModel):
     message: str
     user: Optional[str] = None
@@ -56,6 +67,7 @@ class ToggleIn(BaseModel):
     tts: Optional[bool] = None
     stt: Optional[bool] = None
 
+# ---------- Helpers ----------
 def _build_logger(session_name: Optional[str], user_name: str | None):
     log_cfg = LogConfig(directory=LOG_DIR, session_prefix=prefix)
     return TranscriptLogger(log_cfg, session_name=session_name, user_name=user_name or "User")
@@ -75,7 +87,12 @@ def _extract_tags_from_text(text: str) -> List[str]:
             i = j
         else:
             i += 1
-    return list(dict.fromkeys(tags))
+    # dedupe while preserving order
+    out: List[str] = []
+    for t in tags:
+        if t not in out:
+            out.append(t)
+    return out
 
 def _strip_hashtags(text: str) -> str:
     return " ".join(p for p in text.split() if not (p.startswith("#") and len(p) > 1)).strip()
@@ -103,6 +120,7 @@ def _get_session_buffer(name: str) -> SessionBuffer:
         session_buffers[name] = SessionBuffer()
     return session_buffers[name]
 
+# ---------- Routes ----------
 @app.get("/", response_class=HTMLResponse)
 def index():
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8") if (WEB_DIR / "index.html").exists() \
@@ -113,9 +131,11 @@ def index():
 def chat(inp: ChatIn):
     user_name = (inp.user or raw_cfg.get("user", {}).get("name") or "User").strip()
     sess = (inp.session or "api").strip()
+
+    # Put username into persona context
     app_cfg.user = UserConfig(name=user_name)
 
-    # Retriever and notes
+    # Retrieve RAG notes (user-scoped with optional global)
     notes = []
     if rag_cfg.get("enabled", True):
         retr, top_k, max_note_words = _build_retriever(user_name)
@@ -132,9 +152,8 @@ def chat(inp: ChatIn):
     buf.turns.append(("user", user_line))
     buf.count += 1
 
-    # Use chat API with recent history
-    hist_max = int(raw_cfg.get("chat", {}).get("history_max_messages", 8))
-    history_slice = buf.turns[-hist_max:] if hist_max > 0 else buf.turns
+    # Use chat history with bounded context
+    history_slice = buf.turns[-history_max_messages:] if history_max_messages > 0 else buf.turns
     try:
         answer = generate_chat(history_slice, final_user, app_cfg, str(TEMPLATE_PATH))
     except Exception as e:
@@ -144,7 +163,7 @@ def chat(inp: ChatIn):
     buf.turns.append(("assistant", answer))
     buf.count += 1
 
-    # Periodic summaries
+    # Periodic summaries → saved to RAG store (scoped to this user)
     if rag_cfg.get("enabled", True):
         chunk_messages = int(rag_cfg.get("chunk_messages", 6))
         max_words = int(rag_cfg.get("summary_max_words", 120))
@@ -155,7 +174,12 @@ def chat(inp: ChatIn):
             entry = RAGStore.make_summary_entry(sess, user_name, note, tags)
             STORE.append(entry)
 
-    return ChatOut(answer=answer, model=app_cfg.llm.model, tts_enabled=state.tts_enabled, stt_enabled=state.stt_enabled)
+    return ChatOut(
+        answer=answer,
+        model=app_cfg.llm.model,
+        tts_enabled=state.tts_enabled,
+        stt_enabled=state.stt_enabled
+    )
 
 @app.post("/remember")
 def remember(inp: RememberIn):

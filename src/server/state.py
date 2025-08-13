@@ -14,5 +14,5 @@ class SessionBuffer:
 
 state = RuntimeState()
 
-# In-memory buffers per session name
+# In-memory buffers per session name (web/API side)
 session_buffers: Dict[str, SessionBuffer] = {}
