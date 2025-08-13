@@ -16,7 +16,7 @@ llm:
   base_url: "http://localhost:11434"
   model: "artifish/llama3.2-uncensored"
   temperature: 0.7
-  max_tokens: 512
+  max_tokens: 4096
   request_timeout: 60
 
 prompt:
@@ -42,3 +42,7 @@ retriever:
   top_k: 3
   max_note_words: 60
   require_tags: []
+
+chat:
+  use_chat_api: true
+  history_max_messages: 8   # number of prior messages to send along each turn

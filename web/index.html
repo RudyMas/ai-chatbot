@@ -1,0 +1,109 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>LocalAI Bot</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 24px auto; padding: 0 16px; }
+    .row { display: flex; gap: 8px; margin: 8px 0; }
+    textarea { width: 100%; height: 90px; }
+    input[type="text"] { width: 100%; }
+    #log { white-space: pre-wrap; border: 1px solid #ddd; padding: 12px; border-radius: 8px; min-height: 200px; }
+    button { padding: 8px 12px; }
+    .muted { color: #666; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <h1>LocalAI Bot</h1>
+
+  <div class="row">
+    <input id="user" type="text" placeholder="Username" value="User"/>
+    <input id="session" type="text" placeholder="Session (optional)"/>
+  </div>
+
+  <div>
+    <label><input type="checkbox" id="tts"> TTS</label>
+    <label style="margin-left: 12px;"><input type="checkbox" id="stt"> STT</label>
+    <button onclick="toggleFlags()">Apply</button>
+    <span id="flags" class="muted"></span>
+  </div>
+
+  <h3>Chat</h3>
+  <textarea id="msg" placeholder="Type a message…"></textarea>
+  <div class="row">
+    <button onclick="send()">Send</button>
+  </div>
+
+  <h3>Remember</h3>
+  <input id="fact" type="text" placeholder="Fact to remember. Use #tags like #global"/>
+  <div class="row">
+    <button onclick="remember()">Save Fact</button>
+  </div>
+
+  <h3>Transcript</h3>
+  <div id="log"></div>
+
+  <script>
+    async function send() {
+      const user = document.getElementById('user').value || 'User';
+      const session = document.getElementById('session').value || null;
+      const message = document.getElementById('msg').value.trim();
+      if (!message) return;
+
+      appendLog(user + ": " + message);
+      document.getElementById('msg').value = "";
+
+      const res = await fetch('/chat', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ message, user, session })
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        appendLog("ERROR: " + t);
+        return;
+      }
+      const data = await res.json();
+      appendLog("Assistant: " + data.answer);
+      document.getElementById('tts').checked = data.tts_enabled;
+      document.getElementById('stt').checked = data.stt_enabled;
+      document.getElementById('flags').textContent = `tts=${data.tts_enabled} stt=${data.stt_enabled}`;
+    }
+
+    async function remember() {
+      const user = document.getElementById('user').value || 'User';
+      const session = document.getElementById('session').value || null;
+      const text = document.getElementById('fact').value.trim();
+      if (!text) return;
+      document.getElementById('fact').value = "";
+
+      const res = await fetch('/remember', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ text, user, session })
+      });
+      const data = await res.json();
+      appendLog("✓ Remembered: " + data.stored.text + " [" + (data.stored.tags || []).join(", ") + "]");
+    }
+
+    async function toggleFlags() {
+      const tts = document.getElementById('tts').checked;
+      const stt = document.getElementById('stt').checked;
+      const res = await fetch('/toggle', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ tts, stt })
+      });
+      const data = await res.json();
+      document.getElementById('flags').textContent = `tts=${data.tts_enabled} stt=${data.stt_enabled}`;
+    }
+
+    function appendLog(line) {
+      const el = document.getElementById('log');
+      el.textContent += (el.textContent ? "\n" : "") + line;
+      el.scrollTop = el.scrollHeight;
+    }
+  </script>
+</body>
+</html>

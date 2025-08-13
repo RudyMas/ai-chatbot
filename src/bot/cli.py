@@ -1,6 +1,6 @@
 from __future__ import annotations
-from typing import List
-from bot.llm.ollama import generate
+from typing import List, Tuple
+from bot.llm.ollama import generate, generate_chat
 from bot.config import AppConfig
 from bot.rag.summarizer import summarize_chunk
 from bot.rag.store import RAGStore
@@ -25,37 +25,7 @@ def _build_retriever(rag_cfg, user_name: str | None):
     max_note_words = int(rag_cfg.get("max_note_words", 60))
     return retr, top_k, max_note_words
 
-def _extract_tags_from_text(text: str) -> List[str]:
-    # simple hashtag extractor: words like #global #music
-    tags: List[str] = []
-    cur = ""
-    i = 0
-    while i < len(text):
-        ch = text[i]
-        if ch == "#":
-            j = i + 1
-            token = []
-            while j < len(text) and (text[j].isalnum() or text[j] in ("-", "_")):
-                token.append(text[j])
-                j += 1
-            if token:
-                tags.append("".join(token))
-            i = j
-        else:
-            i += 1
-    return list(dict.fromkeys(t.lower() for t in tags))  # dedupe, lowercase
-
-def _strip_hashtags(text: str) -> str:
-    # remove standalone hashtags from the fact text
-    out = []
-    for part in text.split():
-        if part.startswith("#") and len(part) > 1:
-            continue
-        out.append(part)
-    return " ".join(out).strip()
-
 def chat_once(app_cfg: AppConfig, system_template_path: str, prompt: str, logger=None, rag_cfg=None):
-    # retrieval
     notes = []
     if rag_cfg and rag_cfg.get("enabled", True):
         retr, top_k, max_note_words = _build_retriever(rag_cfg, app_cfg.user.name)
@@ -63,28 +33,29 @@ def chat_once(app_cfg: AppConfig, system_template_path: str, prompt: str, logger
     final_prompt = _context_block(notes) + prompt
 
     if logger: logger.log("user", prompt, user_name=app_cfg.user.name)
+    # single turn is fine here
     answer = generate(final_prompt, app_cfg, system_template_path)
     if logger: logger.log("assistant", answer)
     print(f"\nAssistant: {answer}\n")
 
 def chat_loop(app_cfg: AppConfig, system_template_path: str, logger=None, rag_cfg=None, session_name: str | None = None):
-    print(f"Interactive chat started as {app_cfg.user.name}. Type /exit to quit.")
-    print("Commands: /remember <fact> [#tags]   (e.g., /remember I love synthwave #music #global)\n")
+    print(f"Interactive chat started as {app_cfg.user.name}. Type /exit to quit.\n")
 
-    # RAG summary config
     enabled = bool(rag_cfg and rag_cfg.get("enabled", True))
     chunk_messages = int(rag_cfg.get("chunk_messages", 6)) if enabled else 0
     max_words = int(rag_cfg.get("summary_max_words", 120)) if enabled else 0
-    tags_default = list(rag_cfg.get("tags", ["session-summary"])) if enabled else []
+    tags = list(rag_cfg.get("tags", ["session-summary"])) if enabled else []
     store_path = rag_cfg.get("store_path", "data/rag/store.jsonl") if enabled else None
     store = RAGStore(store_path) if enabled else None
 
-    # Retriever (user-scoped)
     retr, top_k, max_note_words = _build_retriever(rag_cfg or {}, app_cfg.user.name)
 
-    buf: list[tuple[str, str]] = []
+    # rolling conversation buffer
+    buf: List[Tuple[str, str]] = []
     msg_count = 0
     sess = session_name or "session"
+    use_chat_api = bool((rag_cfg or {}).get("use_chat_api", True) or True)  # default True
+    hist_max = int((rag_cfg or {}).get("history_max_messages", 8))
 
     while True:
         try:
@@ -98,47 +69,28 @@ def chat_loop(app_cfg: AppConfig, system_template_path: str, logger=None, rag_cf
             print("Bye!")
             break
 
-        # Handle /remember command
-        if user.lower().startswith("/remember"):
-            if not enabled or store is None:
-                print("RAG store disabled; cannot remember right now.\n")
-                continue
-            fact_text = user[len("/remember"):].strip()
-            if not fact_text:
-                print("Usage: /remember <fact> [#tags]\n")
-                continue
-
-            tags = _extract_tags_from_text(fact_text)
-            fact_clean = _strip_hashtags(fact_text)
-
-            # Add 'global' tag if user typed #global; otherwise the note is user-scoped
-            final_tags = ["manual"] + tags  # 'manual' marks user-added facts
-
-            entry = RAGStore.make_fact_entry(sess, app_cfg.user.name, fact_clean, final_tags)
-            store.append(entry)
-            if logger: logger.log("user", user, user_name=app_cfg.user.name)
-            print("✓ Remembered.\n")
-            # refresh retriever cache next turn (lazy: rebuild instance)
-            retr, top_k, max_note_words = _build_retriever(rag_cfg or {}, app_cfg.user.name)
-            continue
-
         # retrieval injection
         notes = retr.top_k_notes(user, top_k, max_note_words)
-        final_prompt = _context_block(notes) + f"{app_cfg.user.name}: {user}"
+        final_user = _context_block(notes) + f"{app_cfg.user.name}: {user}"
 
         if logger: logger.log("user", user, user_name=app_cfg.user.name)
         buf.append(("user", f"{app_cfg.user.name}: {user}"))
         msg_count += 1
 
-        answer = generate(final_prompt, app_cfg, system_template_path)
+        history_slice = buf[-hist_max:] if hist_max > 0 else buf
+        if use_chat_api:
+            answer = generate_chat(history_slice[:-1], history_slice[-1][1], app_cfg, system_template_path)
+        else:
+            answer = generate(final_user, app_cfg, system_template_path)
+
         if logger: logger.log("assistant", answer)
         buf.append(("assistant", answer))
         msg_count += 1
 
         print(f"Assistant: {answer}\n")
 
-        # periodic summaries → scoped to this user
         if enabled and chunk_messages > 0 and (msg_count % chunk_messages == 0):
-            note = summarize_chunk(app_cfg, system_template_path, buf[-chunk_messages:], max_words)
-            entry = RAGStore.make_summary_entry(sess, app_cfg.user.name, note, tags_default)
+            recent = buf[-chunk_messages:]
+            note = summarize_chunk(app_cfg, system_template_path, recent, max_words)
+            entry = RAGStore.make_summary_entry(sess, app_cfg.user.name, note, tags)
             store.append(entry)
