@@ -7,13 +7,12 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from bot.config import UserConfig
+from bot.config import load_config, get_system_template_path, UserConfig
 from bot.llm.ollama import generate_chat
 from bot.logger import TranscriptLogger, LogConfig
 from bot.rag.store import RAGStore
 from bot.rag.retriever import SimpleRetriever
 from bot.rag.summarizer import summarize_chunk
-from bot.profiles import list_profiles, load_profile
 from server.state import state, session_buffers, SessionBuffer
 
 # ---------- App bootstrap ----------
@@ -25,10 +24,10 @@ WEB_DIR = ROOT / "web"
 WEB_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
-# global mutable config (reloaded on profile change)
+# global mutable config (load default profile at boot)
+from bot.profiles import load_profile, list_profiles
 app_cfg, raw_cfg, TEMPLATE_PATH = load_profile(state.active_profile)
 
-# logging dirs (recreated on reload)
 def _setup_dirs():
     logs_dir = raw_cfg.get("logging", {}).get("dir", "logs")
     log_dir = ROOT / logs_dir
@@ -127,12 +126,10 @@ def _get_session_buffer(name: str) -> SessionBuffer:
     return session_buffers[name]
 
 def _reload_profile(profile: str):
-    """Reload globals for a new profile."""
     global app_cfg, raw_cfg, TEMPLATE_PATH, LOG_DIR, STORE, rag_cfg, history_max_messages, LOG_PREFIX
     app_cfg, raw_cfg, TEMPLATE_PATH = load_profile(profile)
     LOG_DIR, STORE, rag_cfg, history_max_messages, LOG_PREFIX = _setup_dirs()
     state.active_profile = profile
-    # Clear session buffers on profile switch (isolation)
     session_buffers.clear()
 
 # ---------- Routes ----------
@@ -144,10 +141,7 @@ def index():
 
 @app.get("/profiles")
 def get_profiles():
-    return {
-        "active": state.active_profile,
-        "profiles": ["default"] + list_profiles()
-    }
+    return {"active": state.active_profile, "profiles": ["default"] + list_profiles()}
 
 @app.post("/profile/select")
 def select_profile(inp: ProfileSelectIn):
@@ -161,9 +155,27 @@ def select_profile(inp: ProfileSelectIn):
 def chat(inp: ChatIn):
     user_name = (inp.user or raw_cfg.get("user", {}).get("name") or "User").strip()
     sess = (inp.session or "api").strip()
-
     app_cfg.user = UserConfig(name=user_name)
 
+    # Handle /flush commands before any LLM call
+    low = inp.message.strip().lower()
+    if low.startswith("/flush"):
+        buf = _get_session_buffer(sess)
+        if not buf.turns:
+            text = "Nothing to flush."
+        else:
+            all_flag = (low == "/flush all")
+            window = buf.turns[:] if all_flag else buf.turns[-(rag_cfg.get("chunk_messages", 6) or len(buf.turns)):]
+            note = summarize_chunk(app_cfg, str(TEMPLATE_PATH), window, int(rag_cfg.get("summary_max_words", 120)))
+            entry = RAGStore.make_summary_entry(sess, user_name, note, list(rag_cfg.get("tags", ["session-summary"])))
+            STORE.append(entry)
+            flushed = len(window)
+            buf.turns.clear()
+            buf.count = 0
+            text = f"✓ Flushed {flushed} turns to RAG and cleared buffer."
+        return ChatOut(answer=text, model=app_cfg.llm.model, tts_enabled=state.tts_enabled, stt_enabled=state.stt_enabled, profile=state.active_profile)
+
+    # Normal chat flow
     notes = []
     if rag_cfg.get("enabled", True):
         retr, top_k, max_note_words, min_score, fallback_recent = _build_retriever(user_name)

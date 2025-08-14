@@ -40,7 +40,8 @@ def chat_once(app_cfg: AppConfig, system_template_path: str, prompt: str, logger
     print(f"\nAssistant: {answer}\n")
 
 def chat_loop(app_cfg: AppConfig, system_template_path: str, logger=None, rag_cfg=None, session_name: str | None = None):
-    print(f"Interactive chat started as {app_cfg.user.name}. Type /exit to quit.\n")
+    print(f"Interactive chat started as {app_cfg.user.name}. Type /exit to quit.")
+    print("Commands: /remember <fact> [#tags],  /flush [all]\n")
 
     enabled = bool(rag_cfg and rag_cfg.get("enabled", True))
     chunk_messages = int(rag_cfg.get("chunk_messages", 6)) if enabled else 0
@@ -57,6 +58,24 @@ def chat_loop(app_cfg: AppConfig, system_template_path: str, logger=None, rag_cf
     use_chat_api = True
     hist_max = int((rag_cfg or {}).get("history_max_messages", 8))
 
+    def _do_flush(all_turns: bool = False):
+        nonlocal buf, msg_count
+        if not enabled or store is None:
+            print("RAG store disabled; cannot flush.\n")
+            return
+        if not buf:
+            print("Nothing to flush.\n")
+            return
+        window = buf[:] if all_turns else buf[-(chunk_messages if chunk_messages > 0 else len(buf)):]
+        note = summarize_chunk(app_cfg, system_template_path, window, max_words)
+        entry = RAGStore.make_summary_entry(sess, app_cfg.user.name, note, tags)
+        store.append(entry)
+        # Clear buffer to avoid duplicate summarization
+        flushed = len(window)
+        buf = []
+        msg_count = 0
+        print(f"✓ Flushed {flushed} turns to RAG and cleared buffer.\n")
+
     while True:
         try:
             user = input(f"{app_cfg.user.name}: ").strip()
@@ -65,9 +84,16 @@ def chat_loop(app_cfg: AppConfig, system_template_path: str, logger=None, rag_cf
             break
         if not user:
             continue
-        if user.lower() in ("/exit", "/quit"):
+        lo = user.lower().strip()
+        if lo in ("/exit", "/quit"):
             print("Bye!")
             break
+
+        # Manual flush command
+        if lo.startswith("/flush"):
+            all_flag = lo == "/flush all"
+            _do_flush(all_turns=all_flag)
+            continue
 
         notes = retr.top_k_notes(user, top_k, max_note_words, min_score=min_score, fallback_recent=fallback_recent)
         final_user = _context_block(notes) + f"{app_cfg.user.name}: {user}"
