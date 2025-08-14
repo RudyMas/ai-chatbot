@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 import yaml
 
 @dataclass
@@ -31,6 +32,8 @@ class LLMConfig:
     temperature: float
     max_tokens: int
     request_timeout: int
+    # NEW (optional): pass larger context window to Ollama if supported by the model
+    num_ctx: Optional[int] = None
 
 @dataclass
 class AppConfig:
@@ -57,7 +60,6 @@ def load_config(path: str | Path):
         boundaries=cb["personality"]["boundaries"],
     )
     chatbot = ChatbotConfig(identity=identity, personality=personality)
-
     user_cfg = UserConfig(name=user.get("name", "User"))
 
     llm_cfg = LLMConfig(
@@ -67,6 +69,7 @@ def load_config(path: str | Path):
         temperature=float(llm["temperature"]),
         max_tokens=int(llm["max_tokens"]),
         request_timeout=int(llm.get("request_timeout", 60)),
+        num_ctx=int(llm.get("num_ctx")) if llm.get("num_ctx") is not None else None,
     )
 
     return AppConfig(chatbot=chatbot, user=user_cfg, llm=llm_cfg), data
