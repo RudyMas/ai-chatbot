@@ -23,17 +23,18 @@ def _build_retriever(rag_cfg, user_name: str | None):
     )
     top_k = int(rag_cfg.get("top_k", 3))
     max_note_words = int(rag_cfg.get("max_note_words", 60))
-    return retr, top_k, max_note_words
+    min_score = float(rag_cfg.get("min_score", 0.0))
+    fallback_recent = int(rag_cfg.get("fallback_recent", 0))
+    return retr, top_k, max_note_words, min_score, fallback_recent
 
 def chat_once(app_cfg: AppConfig, system_template_path: str, prompt: str, logger=None, rag_cfg=None):
     notes = []
     if rag_cfg and rag_cfg.get("enabled", True):
-        retr, top_k, max_note_words = _build_retriever(rag_cfg, app_cfg.user.name)
-        notes = retr.top_k_notes(prompt, top_k, max_note_words)
+        retr, top_k, max_note_words, min_score, fallback_recent = _build_retriever(rag_cfg, app_cfg.user.name)
+        notes = retr.top_k_notes(prompt, top_k, max_note_words, min_score=min_score, fallback_recent=fallback_recent)
     final_prompt = _context_block(notes) + prompt
 
     if logger: logger.log("user", prompt, user_name=app_cfg.user.name)
-    # single turn is fine here
     answer = generate(final_prompt, app_cfg, system_template_path)
     if logger: logger.log("assistant", answer)
     print(f"\nAssistant: {answer}\n")
@@ -48,13 +49,12 @@ def chat_loop(app_cfg: AppConfig, system_template_path: str, logger=None, rag_cf
     store_path = rag_cfg.get("store_path", "data/rag/store.jsonl") if enabled else None
     store = RAGStore(store_path) if enabled else None
 
-    retr, top_k, max_note_words = _build_retriever(rag_cfg or {}, app_cfg.user.name)
+    retr, top_k, max_note_words, min_score, fallback_recent = _build_retriever(rag_cfg or {}, app_cfg.user.name)
 
-    # rolling conversation buffer
     buf: List[Tuple[str, str]] = []
     msg_count = 0
     sess = session_name or "session"
-    use_chat_api = bool((rag_cfg or {}).get("use_chat_api", True) or True)  # default True
+    use_chat_api = True
     hist_max = int((rag_cfg or {}).get("history_max_messages", 8))
 
     while True:
@@ -69,8 +69,7 @@ def chat_loop(app_cfg: AppConfig, system_template_path: str, logger=None, rag_cf
             print("Bye!")
             break
 
-        # retrieval injection
-        notes = retr.top_k_notes(user, top_k, max_note_words)
+        notes = retr.top_k_notes(user, top_k, max_note_words, min_score=min_score, fallback_recent=fallback_recent)
         final_user = _context_block(notes) + f"{app_cfg.user.name}: {user}"
 
         if logger: logger.log("user", user, user_name=app_cfg.user.name)

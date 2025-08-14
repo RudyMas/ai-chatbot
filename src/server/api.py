@@ -15,37 +15,29 @@ from bot.rag.retriever import SimpleRetriever
 from bot.rag.summarizer import summarize_chunk
 from server.state import state, session_buffers, SessionBuffer
 
-# ---------- App bootstrap ----------
 ROOT = Path(__file__).parents[2]
 CFG_PATH = ROOT / "config" / "default.yaml"
-
 app = FastAPI()
 
-# serve web/ directory for static files
 WEB_DIR = ROOT / "web"
 WEB_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
-# Load config & setup
 app_cfg, raw_cfg = load_config(CFG_PATH)
 TEMPLATE_PATH = get_system_template_path(CFG_PATH, raw_cfg)
 
-# logging setup
 logs_dir = raw_cfg.get("logging", {}).get("dir", "logs")
 prefix = raw_cfg.get("logging", {}).get("session_prefix", "chat")
 LOG_DIR = ROOT / logs_dir
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-# rag setup
 rag_cfg = raw_cfg.get("rag", {}) if isinstance(raw_cfg, dict) else {}
 store_path = rag_cfg.get("store_path", "data/rag/store.jsonl")
 STORE = RAGStore(ROOT / store_path)
 
-# chat settings
 chat_cfg = raw_cfg.get("chat", {}) if isinstance(raw_cfg, dict) else {}
 history_max_messages = int(chat_cfg.get("history_max_messages", 8))
 
-# ---------- Models ----------
 class ChatIn(BaseModel):
     message: str
     user: Optional[str] = None
@@ -67,7 +59,6 @@ class ToggleIn(BaseModel):
     tts: Optional[bool] = None
     stt: Optional[bool] = None
 
-# ---------- Helpers ----------
 def _build_logger(session_name: Optional[str], user_name: str | None):
     log_cfg = LogConfig(directory=LOG_DIR, session_prefix=prefix)
     return TranscriptLogger(log_cfg, session_name=session_name, user_name=user_name or "User")
@@ -87,7 +78,6 @@ def _extract_tags_from_text(text: str) -> List[str]:
             i = j
         else:
             i += 1
-    # dedupe while preserving order
     out: List[str] = []
     for t in tags:
         if t not in out:
@@ -113,14 +103,15 @@ def _build_retriever(user_name: Optional[str]):
     )
     top_k = int(rag_cfg.get("top_k", 3))
     max_note_words = int(rag_cfg.get("max_note_words", 60))
-    return retr, top_k, max_note_words
+    min_score = float(rag_cfg.get("min_score", 0.0))
+    fallback_recent = int(rag_cfg.get("fallback_recent", 0))
+    return retr, top_k, max_note_words, min_score, fallback_recent
 
 def _get_session_buffer(name: str) -> SessionBuffer:
     if name not in session_buffers:
         session_buffers[name] = SessionBuffer()
     return session_buffers[name]
 
-# ---------- Routes ----------
 @app.get("/", response_class=HTMLResponse)
 def index():
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8") if (WEB_DIR / "index.html").exists() \
@@ -132,27 +123,22 @@ def chat(inp: ChatIn):
     user_name = (inp.user or raw_cfg.get("user", {}).get("name") or "User").strip()
     sess = (inp.session or "api").strip()
 
-    # Put username into persona context
     app_cfg.user = UserConfig(name=user_name)
 
-    # Retrieve RAG notes (user-scoped with optional global)
     notes = []
     if rag_cfg.get("enabled", True):
-        retr, top_k, max_note_words = _build_retriever(user_name)
-        notes = retr.top_k_notes(inp.message, top_k, max_note_words)
+        retr, top_k, max_note_words, min_score, fallback_recent = _build_retriever(user_name)
+        notes = retr.top_k_notes(inp.message, top_k, max_note_words, min_score=min_score, fallback_recent=fallback_recent)
     user_line = f"{user_name}: {inp.message}"
     final_user = _context_block(notes) + user_line
 
-    # Logger
     logger = _build_logger(sess, user_name)
     logger.log("user", inp.message, user_name=user_name)
 
-    # Session history
     buf = _get_session_buffer(sess)
     buf.turns.append(("user", user_line))
     buf.count += 1
 
-    # Use chat history with bounded context
     history_slice = buf.turns[-history_max_messages:] if history_max_messages > 0 else buf.turns
     try:
         answer = generate_chat(history_slice, final_user, app_cfg, str(TEMPLATE_PATH))
@@ -163,7 +149,6 @@ def chat(inp: ChatIn):
     buf.turns.append(("assistant", answer))
     buf.count += 1
 
-    # Periodic summaries → saved to RAG store (scoped to this user)
     if rag_cfg.get("enabled", True):
         chunk_messages = int(rag_cfg.get("chunk_messages", 6))
         max_words = int(rag_cfg.get("summary_max_words", 120))

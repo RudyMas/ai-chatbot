@@ -14,7 +14,7 @@ user:
 llm:
   provider: "ollama"
   base_url: "http://localhost:11434"
-  model: "artifish/llama3.2-uncensored"
+  model: "CognitiveComputations/dolphin-mistral-nemo"
   temperature: 0.7
   max_tokens: 4096
   request_timeout: 60
@@ -42,6 +42,8 @@ retriever:
   top_k: 3
   max_note_words: 60
   require_tags: []
+  min_score: 0.05
+  fallback_recent: 2
 
 chat:
   use_chat_api: true

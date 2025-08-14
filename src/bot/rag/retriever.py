@@ -1,8 +1,9 @@
 from __future__ import annotations
 from pathlib import Path
-from typing import List, Dict, Iterable, Optional
+from typing import List, Dict, Iterable, Optional, Tuple
 import json
 import re
+from datetime import datetime
 
 _BASIC_STOPWORDS = {
     "the","a","an","and","or","but","if","on","in","at","to","for","of","with","by",
@@ -33,7 +34,24 @@ def _trim_words(text: str, max_words: int) -> str:
         return text.strip()
     return " ".join(ws[:max_words]) + " …"
 
+def _parse_ts(iso: str) -> float:
+    # supports "...Z" or plain ISO
+    try:
+        if iso.endswith("Z"):
+            iso = iso[:-1]
+        return datetime.fromisoformat(iso).timestamp()
+    except Exception:
+        return 0.0
+
 class SimpleRetriever:
+    """
+    Loads entries from store.jsonl and can:
+    - return top-k by keyword overlap
+    - fall back to the most recent N notes when no overlap
+    Respects:
+      - require_tags (subset)
+      - user scoping with require_user_match + global tags
+    """
     def __init__(
         self,
         store_path: str | Path,
@@ -71,28 +89,55 @@ class SimpleRetriever:
                     tags = set(obj.get("tags", []))
                     if not self.require_tags.issubset(tags):
                         continue
-                # user scoping
+                # user scoping (allow global tags to pass)
                 if self.require_user_match:
                     note_user = (obj.get("user_name") or "").strip()
                     tags = set(obj.get("tags", []))
                     is_global = bool(self.global_tags and (self.global_tags & tags))
                     if not is_global:
                         if not self.user_name:
-                            # if we require match but don't know the user, skip
                             continue
                         if note_user.lower() != self.user_name.lower():
                             continue
-                if "text" in obj:
-                    self.docs.append(obj)
+                # require text
+                if "text" not in obj:
+                    continue
+                # stash ts for recency sorting
+                ts = obj.get("ts", "")
+                obj["_ts_float"] = _parse_ts(ts) if isinstance(ts, str) else 0.0
+                self.docs.append(obj)
         self._loaded = True
 
-    def top_k_notes(self, query: str, k: int, max_note_words: int) -> List[str]:
-        self._load()
-        if not self.docs or not query.strip():
+    def _recent_notes(self, k: int, max_note_words: int) -> List[str]:
+        if not self.docs:
             return []
+        # most recent first (by timestamp; fallback to insertion order if missing)
+        docs_sorted = sorted(self.docs, key=lambda d: d.get("_ts_float", 0.0), reverse=True)
+        out: List[str] = []
+        for d in docs_sorted:
+            out.append(_trim_words(d["text"], max_note_words))
+            if len(out) >= k:
+                break
+        return out
+
+    def top_k_notes(self, query: str, k: int, max_note_words: int, min_score: float = 0.0, fallback_recent: int = 0) -> List[str]:
+        self._load()
+        if not self.docs:
+            return []
+        query = query.strip()
+        if not query:
+            # no query → only recent fallback if requested
+            return self._recent_notes(fallback_recent or k, max_note_words) if fallback_recent else []
+
         scored = [( _score(query, d["text"]), d["text"] ) for d in self.docs]
         scored.sort(key=lambda x: x[0], reverse=True)
-        out = []
+
+        best = scored[0][0] if scored else 0.0
+        if best < min_score:
+            # below threshold → use recent fallback
+            return self._recent_notes(fallback_recent or k, max_note_words) if fallback_recent else []
+
+        out: List[str] = []
         for sc, txt in scored[:k]:
             if sc <= 0:
                 break
