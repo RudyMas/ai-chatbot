@@ -7,37 +7,46 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from bot.config import load_config, get_system_template_path, UserConfig
+from bot.config import UserConfig
 from bot.llm.ollama import generate_chat
 from bot.logger import TranscriptLogger, LogConfig
 from bot.rag.store import RAGStore
 from bot.rag.retriever import SimpleRetriever
 from bot.rag.summarizer import summarize_chunk
+from bot.profiles import list_profiles, load_profile
 from server.state import state, session_buffers, SessionBuffer
 
+# ---------- App bootstrap ----------
 ROOT = Path(__file__).parents[2]
-CFG_PATH = ROOT / "config" / "default.yaml"
 app = FastAPI()
 
+# serve web/
 WEB_DIR = ROOT / "web"
 WEB_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
-app_cfg, raw_cfg = load_config(CFG_PATH)
-TEMPLATE_PATH = get_system_template_path(CFG_PATH, raw_cfg)
+# global mutable config (reloaded on profile change)
+app_cfg, raw_cfg, TEMPLATE_PATH = load_profile(state.active_profile)
 
-logs_dir = raw_cfg.get("logging", {}).get("dir", "logs")
-prefix = raw_cfg.get("logging", {}).get("session_prefix", "chat")
-LOG_DIR = ROOT / logs_dir
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+# logging dirs (recreated on reload)
+def _setup_dirs():
+    logs_dir = raw_cfg.get("logging", {}).get("dir", "logs")
+    log_dir = ROOT / logs_dir
+    log_dir.mkdir(parents=True, exist_ok=True)
 
-rag_cfg = raw_cfg.get("rag", {}) if isinstance(raw_cfg, dict) else {}
-store_path = rag_cfg.get("store_path", "data/rag/store.jsonl")
-STORE = RAGStore(ROOT / store_path)
+    rag_cfg = raw_cfg.get("rag", {}) if isinstance(raw_cfg, dict) else {}
+    store_path = rag_cfg.get("store_path", "data/rag/store.jsonl")
+    store = RAGStore(ROOT / store_path)
 
-chat_cfg = raw_cfg.get("chat", {}) if isinstance(raw_cfg, dict) else {}
-history_max_messages = int(chat_cfg.get("history_max_messages", 8))
+    chat_cfg = raw_cfg.get("chat", {}) if isinstance(raw_cfg, dict) else {}
+    history_max = int(chat_cfg.get("history_max_messages", 8))
 
+    prefix = raw_cfg.get("logging", {}).get("session_prefix", "chat")
+    return log_dir, store, rag_cfg, history_max, prefix
+
+LOG_DIR, STORE, rag_cfg, history_max_messages, LOG_PREFIX = _setup_dirs()
+
+# ---------- Models ----------
 class ChatIn(BaseModel):
     message: str
     user: Optional[str] = None
@@ -48,6 +57,7 @@ class ChatOut(BaseModel):
     model: str
     tts_enabled: bool
     stt_enabled: bool
+    profile: str
 
 class RememberIn(BaseModel):
     text: str
@@ -59,8 +69,12 @@ class ToggleIn(BaseModel):
     tts: Optional[bool] = None
     stt: Optional[bool] = None
 
+class ProfileSelectIn(BaseModel):
+    profile: str
+
+# ---------- Helpers ----------
 def _build_logger(session_name: Optional[str], user_name: str | None):
-    log_cfg = LogConfig(directory=LOG_DIR, session_prefix=prefix)
+    log_cfg = LogConfig(directory=LOG_DIR, session_prefix=LOG_PREFIX)
     return TranscriptLogger(log_cfg, session_name=session_name, user_name=user_name or "User")
 
 def _extract_tags_from_text(text: str) -> List[str]:
@@ -95,7 +109,7 @@ def _context_block(notes: list[str]) -> str:
 def _build_retriever(user_name: Optional[str]):
     require_user_match = bool(rag_cfg.get("require_user_match", False))
     retr = SimpleRetriever(
-        store_path=ROOT / store_path,
+        store_path=STORE.path,
         require_tags=rag_cfg.get("require_tags", []),
         user_name=user_name,
         require_user_match=require_user_match,
@@ -112,11 +126,36 @@ def _get_session_buffer(name: str) -> SessionBuffer:
         session_buffers[name] = SessionBuffer()
     return session_buffers[name]
 
+def _reload_profile(profile: str):
+    """Reload globals for a new profile."""
+    global app_cfg, raw_cfg, TEMPLATE_PATH, LOG_DIR, STORE, rag_cfg, history_max_messages, LOG_PREFIX
+    app_cfg, raw_cfg, TEMPLATE_PATH = load_profile(profile)
+    LOG_DIR, STORE, rag_cfg, history_max_messages, LOG_PREFIX = _setup_dirs()
+    state.active_profile = profile
+    # Clear session buffers on profile switch (isolation)
+    session_buffers.clear()
+
+# ---------- Routes ----------
 @app.get("/", response_class=HTMLResponse)
 def index():
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8") if (WEB_DIR / "index.html").exists() \
         else "<h1>LocalAI Bot</h1><p>Place web/index.html to use the UI.</p>"
     return HTMLResponse(html)
+
+@app.get("/profiles")
+def get_profiles():
+    return {
+        "active": state.active_profile,
+        "profiles": ["default"] + list_profiles()
+    }
+
+@app.post("/profile/select")
+def select_profile(inp: ProfileSelectIn):
+    try:
+        _reload_profile(inp.profile)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "active": state.active_profile}
 
 @app.post("/chat", response_model=ChatOut)
 def chat(inp: ChatIn):
@@ -163,7 +202,8 @@ def chat(inp: ChatIn):
         answer=answer,
         model=app_cfg.llm.model,
         tts_enabled=state.tts_enabled,
-        stt_enabled=state.stt_enabled
+        stt_enabled=state.stt_enabled,
+        profile=state.active_profile
     )
 
 @app.post("/remember")

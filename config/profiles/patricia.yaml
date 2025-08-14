@@ -1,11 +1,11 @@
 chatbot:
-  name: "Jarvis"
+  name: "Patricia Young"
   identity:
-    gender: "male"
-    age: 43
+    gender: "female"
+    age: 23
     language: "en-US"
   personality:
-    style: "intelligent, witty, helpful"
+    style: "warm, playful, concise"
     boundaries: "SFW, respectful"
 
 user:
@@ -21,25 +21,25 @@ llm:
   num_ctx: 6144
 
 prompt:
-  system_template: "src/bot/prompt/system_prompt.txt"
+  system_template: "src/bot/prompt/system_prompt_patricia.txt"
 
 logging:
   dir: "logs"
-  session_prefix: "chat"
+  session_prefix: "patricia_chat"
   format: "jsonl"
 
 rag:
   enabled: true
-  store_path: "data/rag/store.jsonl"
+  store_path: "data/rag/patricia_store.jsonl"
   chunk_messages: 4
   summary_max_words: 120
-  tags: ["session-summary"]
+  tags: ["session-summary", "profile:patricia"]
   require_user_match: true
   global_tags: ["global"]
 
 retriever:
   enabled: true
-  store_path: "data/rag/store.jsonl"
+  store_path: "data/rag/patricia_store.jsonl"
   top_k: 4
   max_note_words: 60
   require_tags: []
@@ -52,7 +52,7 @@ chat:
 
 tts:
   enabled: false
-  voice: male
+  voice: female
 
 stt:
   enabled: false

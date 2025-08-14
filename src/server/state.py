@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple
 class RuntimeState:
     tts_enabled: bool = False
     stt_enabled: bool = False
+    active_profile: str = "default"
 
 @dataclass
 class SessionBuffer:

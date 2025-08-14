@@ -8,7 +8,7 @@
     body { font-family: system-ui, sans-serif; max-width: 800px; margin: 24px auto; padding: 0 16px; }
     .row { display: flex; gap: 8px; margin: 8px 0; }
     textarea { width: 100%; height: 90px; }
-    input[type="text"] { width: 100%; }
+    input[type="text"], select { width: 100%; }
     #log { white-space: pre-wrap; border: 1px solid #ddd; padding: 12px; border-radius: 8px; min-height: 200px; }
     button { padding: 8px 12px; }
     .muted { color: #666; font-size: 0.9em; }
@@ -20,6 +20,13 @@
   <div class="row">
     <input id="user" type="text" placeholder="Username" value="User"/>
     <input id="session" type="text" placeholder="Session (optional)"/>
+  </div>
+
+  <div class="row">
+    <label style="min-width: 90px;">Profile</label>
+    <select id="profile"></select>
+    <button onclick="applyProfile()">Apply Profile</button>
+    <span id="profileActive" class="muted"></span>
   </div>
 
   <div>
@@ -45,6 +52,38 @@
   <div id="log"></div>
 
   <script>
+    async function loadProfiles() {
+      const res = await fetch('/profiles');
+      const data = await res.json();
+      const sel = document.getElementById('profile');
+      sel.innerHTML = '';
+      data.profiles.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p;
+        if (p === data.active) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      document.getElementById('profileActive').textContent = `active: ${data.active}`;
+    }
+
+    async function applyProfile() {
+      const p = document.getElementById('profile').value;
+      const res = await fetch('/profile/select', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ profile: p })
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        appendLog("ERROR switching profile: " + t);
+        return;
+      }
+      const data = await res.json();
+      document.getElementById('profileActive').textContent = `active: ${data.active}`;
+      appendLog(`✓ Profile switched to ${data.active}.`);
+    }
+
     async function send() {
       const user = document.getElementById('user').value || 'User';
       const session = document.getElementById('session').value || null;
@@ -65,7 +104,7 @@
         return;
       }
       const data = await res.json();
-      appendLog("Assistant: " + data.answer);
+      appendLog(`Assistant (${data.profile}): ` + data.answer);
       document.getElementById('tts').checked = data.tts_enabled;
       document.getElementById('stt').checked = data.stt_enabled;
       document.getElementById('flags').textContent = `tts=${data.tts_enabled} stt=${data.stt_enabled}`;
@@ -104,6 +143,9 @@
       el.textContent += (el.textContent ? "\n" : "") + line;
       el.scrollTop = el.scrollHeight;
     }
+
+    // init
+    loadProfiles();
   </script>
 </body>
 </html>
