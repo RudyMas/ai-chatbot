@@ -106,6 +106,16 @@
     <button onclick="remember()">Save Fact</button>
 </div>
 
+<h3>Memory Manager</h3>
+<div class="row">
+    <button id="btnMemList">📜 List Memory</button>
+    <button id="btnMemFlush">🗑 Flush (user+session)</button>
+    <button id="btnMemClean">🧹 Clean (keep 200)</button>
+    <span id="memStatus" class="muted"></span>
+</div>
+
+<div id="memList"></div>
+
 <h3>Transcript</h3>
 <div id="log"></div>
 
@@ -385,6 +395,254 @@
         el.textContent += (el.textContent ? "\n" : "") + line;
         el.scrollTop = el.scrollHeight;
     }
+
+    // --- Memory Manager ---
+    // document.getElementById('btnMemList').onclick = async () => {
+    //     const user = document.getElementById('user').value || 'User';
+    //     const session = document.getElementById('session').value || null;
+    //     const url = '/memory/list?' + new URLSearchParams({user, session, limit: 50});
+    //     const r = await fetch(url);
+    //     if (!r.ok) {
+    //         appendLog('Memory list error: ' + await r.text());
+    //         return;
+    //     }
+    //     const js = await r.json();
+    //     const pre = document.getElementById('debugOut');
+    //     pre.textContent = JSON.stringify(js, null, 2);
+    //     pre.style.display = 'block';
+    //     appendLog(`📜 Listed ${js.total} memory items (showing ${js.items.length})`);
+    // };
+    //
+    // document.getElementById('btnMemFlush').onclick = async () => {
+    //     const user = document.getElementById('user').value || 'User';
+    //     const session = document.getElementById('session').value || null;
+    //     if (!confirm(`Flush ALL memory for ${user}${session ? " / " + session : ""}?`)) return;
+    //     const r = await fetch('/memory/flush', {
+    //         method: 'POST',
+    //         headers: {'Content-Type': 'application/json'},
+    //         body: JSON.stringify({user, session})
+    //     });
+    //     if (!r.ok) {
+    //         appendLog('Memory flush error: ' + await r.text());
+    //         return;
+    //     }
+    //     const js = await r.json();
+    //     appendLog(`🗑 Flushed memory: removed ${js.removed}, remaining ${js.remaining}`);
+    // };
+    //
+    // document.getElementById('btnMemClean').onclick = async () => {
+    //     const user = document.getElementById('user').value || 'User';
+    //     if (!confirm(`Clean memory for ${user} (dedup + keep last 200)?`)) return;
+    //     const r = await fetch('/memory/clean', {
+    //         method: 'POST',
+    //         headers: {'Content-Type': 'application/json'},
+    //         body: JSON.stringify({user, keep_latest: 200})
+    //     });
+    //     if (!r.ok) {
+    //         appendLog('Memory clean error: ' + await r.text());
+    //         return;
+    //     }
+    //     const js = await r.json();
+    //     appendLog(`🧹 Cleaned memory: removed ${js.removed}, remaining ${js.remaining}`);
+    // };
+
+    // ===== Memory Manager UI =====
+    let memQuery = {offset: 0, limit: 50}; // pagination state
+
+    function trimText(s, n = 500) {
+        if (!s) return "";
+        s = String(s);
+        return s.length > n ? s.slice(0, n - 1) + "…" : s;
+    }
+
+    function memControlsHTML() {
+        return `
+    <div class="row" style="margin-top:8px;">
+      <button id="btnMemRefresh">↻ Refresh</button>
+      <button id="btnMemMore">➕ Load more</button>
+      <button id="btnMemDeleteSel">❌ Delete selected</button>
+    </div>
+  `;
+    }
+
+    function renderMemoryList(payload) {
+        const cont = document.getElementById('memList');
+        const items = payload.items || [];
+        const total = payload.total || 0;
+
+        const table = `
+    <table style="width:100%; border-collapse:collapse; font-size:14px;">
+      <thead>
+        <tr>
+          <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">
+            <input id="memChkAll" type="checkbox"/>
+          </th>
+          <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">idx</th>
+          <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">ts</th>
+          <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">type</th>
+          <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">tags</th>
+          <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">session</th>
+          <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">text</th>
+          <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">action</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${items.map(it => `
+          <tr data-idx="${it.idx}">
+            <td style="padding:6px; border-bottom:1px solid #eee;">
+              <input class="memChk" type="checkbox" data-idx="${it.idx}"/>
+            </td>
+            <td style="padding:6px; border-bottom:1px solid #eee;">${it.idx}</td>
+            <td style="padding:6px; border-bottom:1px solid #eee;">${it.ts || ''}</td>
+            <td style="padding:6px; border-bottom:1px solid #eee;">${it.type || ''}</td>
+            <td style="padding:6px; border-bottom:1px solid #eee;">${(it.tags || []).join(', ')}</td>
+            <td style="padding:6px; border-bottom:1px solid #eee;">${it.session || ''}</td>
+            <td style="padding:6px; border-bottom:1px solid #eee;">${trimText(it.text || it.note || '')}</td>
+            <td style="padding:6px; border-bottom:1px solid #eee;">
+              <button class="btnMemDel" data-idx="${it.idx}">Delete</button>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+
+        cont.innerHTML = table + memControlsHTML();
+
+        // status line
+        document.getElementById('memStatus').textContent =
+            `Showing ${items.length} of ${total} (offset=${memQuery.offset}, limit=${memQuery.limit})`;
+
+        // hook up header checkbox
+        const chkAll = document.getElementById('memChkAll');
+        chkAll.addEventListener('change', () => {
+            document.querySelectorAll('.memChk').forEach(c => c.checked = chkAll.checked);
+        });
+
+        // per-row delete
+        cont.querySelectorAll('.btnMemDel').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const idx = parseInt(btn.getAttribute('data-idx'), 10);
+                if (!Number.isFinite(idx)) return;
+                if (!confirm(`Delete item idx=${idx}?`)) return;
+                const r = await fetch('/memory/delete', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({idx: [idx]})
+                });
+                if (!r.ok) {
+                    appendLog('Delete failed: ' + await r.text());
+                    return;
+                }
+                appendLog(`❌ Deleted idx=${idx}`);
+                // Refresh current page
+                await loadMemoryList(false);
+            });
+        });
+
+        // bulk controls
+        document.getElementById('btnMemDeleteSel').onclick = async () => {
+            const ids = Array.from(document.querySelectorAll('.memChk'))
+                .filter(c => c.checked)
+                .map(c => parseInt(c.getAttribute('data-idx'), 10))
+                .filter(Number.isFinite);
+            if (!ids.length) {
+                alert('Select at least one item.');
+                return;
+            }
+            if (!confirm(`Delete ${ids.length} selected items?`)) return;
+
+            const r = await fetch('/memory/delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({idx: ids})
+            });
+            if (!r.ok) {
+                appendLog('Bulk delete failed: ' + await r.text());
+                return;
+            }
+            const js = await r.json();
+            appendLog(`❌ Deleted ${js.removed} items (remaining ${js.remaining})`);
+            await loadMemoryList(false);
+        };
+
+        document.getElementById('btnMemRefresh').onclick = () => loadMemoryList(false);
+
+        document.getElementById('btnMemMore').onclick = async () => {
+            memQuery.offset += memQuery.limit;
+            await loadMemoryList(true); // append
+        };
+    }
+
+    async function loadMemoryList(append = false) {
+        const user = document.getElementById('user').value || 'User';
+        const session = document.getElementById('session').value || '';
+        const params = {user, session, offset: memQuery.offset, limit: memQuery.limit};
+        const url = '/memory/list?' + new URLSearchParams(params);
+        const r = await fetch(url);
+        if (!r.ok) {
+            appendLog('Memory list error: ' + await r.text());
+            return;
+        }
+        const js = await r.json();
+
+        if (append && document.getElementById('memList').innerHTML.trim()) {
+            // merge append into current table (simple way: refetch up to new offset+limit and rerender)
+            // to keep code simple and avoid DOM diffing, just rerender with concatenated items
+            const prev = document.getElementById('memList').dataset._items
+                ? JSON.parse(document.getElementById('memList').dataset._items) : [];
+            const combined = prev.concat(js.items);
+            const payload = {total: js.total, items: combined};
+            document.getElementById('memList').dataset._items = JSON.stringify(combined);
+            renderMemoryList(payload);
+        } else {
+            document.getElementById('memList').dataset._items = JSON.stringify(js.items);
+            renderMemoryList(js);
+        }
+    }
+
+    // Hook existing buttons to the new loader/clean/flush
+    document.getElementById('btnMemList').onclick = async () => {
+        memQuery.offset = 0;
+        await loadMemoryList(false);
+    };
+
+    document.getElementById('btnMemFlush').onclick = async () => {
+        const user = document.getElementById('user').value || 'User';
+        const session = document.getElementById('session').value || null;
+        if (!confirm(`Flush ALL memory for ${user}${session ? " / " + session : ""}?`)) return;
+        const r = await fetch('/memory/flush', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({user, session})
+        });
+        if (!r.ok) {
+            appendLog('Memory flush error: ' + await r.text());
+            return;
+        }
+        const js = await r.json();
+        appendLog(`🗑 Flushed memory: removed ${js.removed}, remaining ${js.remaining}`);
+        memQuery.offset = 0;
+        await loadMemoryList(false);
+    };
+
+    document.getElementById('btnMemClean').onclick = async () => {
+        const user = document.getElementById('user').value || 'User';
+        if (!confirm(`Clean memory for ${user} (dedup + keep last 200)?`)) return;
+        const r = await fetch('/memory/clean', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({user, keep_latest: 200})
+        });
+        if (!r.ok) {
+            appendLog('Memory clean error: ' + await r.text());
+            return;
+        }
+        const js = await r.json();
+        appendLog(`🧹 Cleaned memory: removed ${js.removed}, remaining ${js.remaining}`);
+        memQuery.offset = 0;
+        await loadMemoryList(false);
+    };
 
     // init
     loadProfiles();

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
 
 import io
 import os
@@ -9,7 +9,7 @@ import uuid
 import tempfile
 import subprocess
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Body
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -33,6 +33,7 @@ app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
 # global mutable config (load default profile at boot)
 from bot.profiles import load_profile, list_profiles
+
 app_cfg, raw_cfg, TEMPLATE_PATH = load_profile(state.active_profile)
 
 
@@ -64,6 +65,7 @@ def _hydrate_audio_flags_from_config():
 LOG_DIR, STORE, rag_cfg, history_max_messages, LOG_PREFIX = _setup_dirs()
 _hydrate_audio_flags_from_config()
 
+
 # ---------- Models ----------
 class ChatIn(BaseModel):
     message: str
@@ -93,6 +95,26 @@ class ToggleIn(BaseModel):
 
 class ProfileSelectIn(BaseModel):
     profile: str
+
+
+class MemoryListOut(BaseModel):
+    total: int
+    items: list
+
+
+class MemoryDeleteIn(BaseModel):
+    idx: List[int]  # line numbers to delete
+
+
+class MemoryFlushIn(BaseModel):
+    user: Optional[str] = None
+    session: Optional[str] = None
+
+
+class MemoryCleanIn(BaseModel):
+    user: Optional[str] = None
+    # If provided, keep only the most recent N items for this user (after dedup)
+    keep_latest: Optional[int] = None
 
 
 # ---------- Helpers ----------
@@ -171,6 +193,60 @@ def _reload_profile(profile: str):
     session_buffers.clear()
 
 
+def _read_store_all() -> List[Dict[str, Any]]:
+    """Read the entire JSONL store into memory as a list of dicts."""
+    path = STORE.path
+    entries: List[Dict[str, Any]] = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except Exception:
+                    # skip malformed lines
+                    continue
+    except FileNotFoundError:
+        pass
+    return entries
+
+
+def _write_store_all(entries: List[Dict[str, Any]]) -> None:
+    """Rewrite the JSONL file with the given entries."""
+    path = STORE.path
+    with open(path, "w", encoding="utf-8") as f:
+        for e in entries:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+
+
+def _normalize_text(t: str) -> str:
+    return " ".join((t or "").strip().lower().split())
+
+
+def _matches_filters(
+        e: Dict[str, Any],
+        user: Optional[str],
+        session: Optional[str],
+        tags: Optional[List[str]],
+        types: Optional[List[str]],
+) -> bool:
+    if user and e.get("user_name") != user:
+        return False
+    if session and e.get("session") != session:
+        return False
+    if types:
+        if (e.get("type") or "").lower() not in {t.lower() for t in types}:
+            return False
+    if tags:
+        etags = [str(t).lower() for t in (e.get("tags") or [])]
+        for t in tags:
+            if t.lower() not in etags:
+                return False
+    return True
+
+
 # ---------- Routes ----------
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -215,13 +291,15 @@ def chat(inp: ChatIn):
             buf.turns.clear()
             buf.count = 0
             text = f"✓ Flushed {flushed} turns to RAG and cleared buffer."
-        return ChatOut(answer=text, model=app_cfg.llm.model, tts_enabled=state.tts_enabled, stt_enabled=state.stt_enabled, profile=state.active_profile)
+        return ChatOut(answer=text, model=app_cfg.llm.model, tts_enabled=state.tts_enabled,
+                       stt_enabled=state.stt_enabled, profile=state.active_profile)
 
     # Normal chat flow
     notes: List[str] = []
     if rag_cfg.get("enabled", True):
         retr, top_k, max_note_words, min_score, fallback_recent = _build_retriever(user_name)
-        notes = retr.top_k_notes(inp.message, top_k, max_note_words, min_score=min_score, fallback_recent=fallback_recent)
+        notes = retr.top_k_notes(inp.message, top_k, max_note_words, min_score=min_score,
+                                 fallback_recent=fallback_recent)
 
     user_line = f"{user_name}: {inp.message}"
     final_user = _context_block(notes) + user_line
@@ -289,11 +367,12 @@ def toggle(inp: ToggleIn):
 from typing import Optional
 from fastapi import Query, Body, Form
 
+
 @app.api_route("/speak", methods=["GET", "POST"])
 def speak(
-    text: Optional[str] = Query(None),
-    text_body: Optional[str] = Body(None),
-    text_form: Optional[str] = Form(None),
+        text: Optional[str] = Query(None),
+        text_body: Optional[str] = Body(None),
+        text_form: Optional[str] = Form(None),
 ):
     """
     TTS using Piper. Accepts text via query (?text=...), JSON body {"text": "..."} or form field.
@@ -328,7 +407,8 @@ def speak(
     try:
         # Feed text on stdin
         proc = subprocess.run(
-            [piper_bin, "--model", model_path, "--config", config_path, "--output_file", tmp_wav, "--sample_rate", str(sr)],
+            [piper_bin, "--model", model_path, "--config", config_path, "--output_file", tmp_wav, "--sample_rate",
+             str(sr)],
             input=txt.encode("utf-8"),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -483,3 +563,150 @@ async def memory_import(file: UploadFile = File(...)):
             f.write(b"\n")
         f.write(data)
     return {"ok": True, "bytes_appended": len(data)}
+
+
+@app.get("/memory/list", response_model=MemoryListOut)
+def memory_list(
+        user: Optional[str] = Query(None),
+        session: Optional[str] = Query(None),
+        tags: Optional[str] = Query(None, description="Comma-separated tags"),
+        types: Optional[str] = Query(None, description="Comma-separated types (e.g. fact,summary)"),
+        offset: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=1000),
+):
+    """
+    List items from the JSONL RAG store.
+    - Identify items by `idx` (line number) so they can be deleted later.
+    - Filters: user, session, tags, types
+    """
+    tag_list = [t.strip() for t in tags.split(",")] if tags else None
+    type_list = [t.strip() for t in types.split(",")] if types else None
+
+    entries = _read_store_all()
+    # Attach idx = original line number
+    indexed = []
+    for i, e in enumerate(entries):
+        if _matches_filters(e, user, session, tag_list, type_list):
+            item = dict(e)
+            item["idx"] = i
+            # keep a compact projection
+            item.setdefault("text", e.get("text") or e.get("note") or "")
+            item.setdefault("type", e.get("type") or "")
+            item.setdefault("tags", e.get("tags") or [])
+            item.setdefault("session", e.get("session") or "")
+            item.setdefault("user_name", e.get("user_name") or "")
+            item.setdefault("ts", e.get("ts") or "")
+            indexed.append(item)
+
+    total = len(indexed)
+    items = indexed[offset: offset + limit]
+    return MemoryListOut(total=total, items=items)
+
+
+@app.post("/memory/delete")
+def memory_delete(inp: MemoryDeleteIn):
+    """
+    Delete specific lines (by idx) from the store.
+    NOTE: idx refers to the current line-number positions; if you plan multiple deletes,
+    call list → delete once with all idx to avoid reindex surprises.
+    """
+    if not inp.idx:
+        raise HTTPException(status_code=400, detail="idx is required")
+    to_delete = set(int(i) for i in inp.idx)
+
+    entries = _read_store_all()
+    kept = [e for i, e in enumerate(entries) if i not in to_delete]
+    removed = len(entries) - len(kept)
+    _write_store_all(kept)
+
+    return {"ok": True, "removed": removed, "remaining": len(kept)}
+
+
+@app.post("/memory/flush")
+def memory_flush(inp: MemoryFlushIn):
+    """
+    Bulk delete entries by user and/or session.
+    - If both user and session are None, refuse (too destructive).
+    """
+    if not inp.user and not inp.session:
+        raise HTTPException(status_code=400, detail="Specify user and/or session to flush.")
+
+    entries = _read_store_all()
+    kept = []
+    removed = 0
+    for e in entries:
+        if _matches_filters(e, user=inp.user, session=inp.session, tags=None, types=None):
+            removed += 1
+        else:
+            kept.append(e)
+    _write_store_all(kept)
+    return {"ok": True, "removed": removed, "remaining": len(kept)}
+
+
+@app.post("/memory/clean")
+def memory_clean(inp: MemoryCleanIn):
+    """
+    De-duplicate entries for a user (optional).
+    - Deduplication key = normalized text (lowercased, collapsed spaces).
+    - Keeps the MOST RECENT occurrence of each unique text.
+    - If keep_latest is set, after dedup we keep only that many latest items for the user.
+    If 'user' is None, applies to ALL users.
+    """
+    entries = _read_store_all()
+
+    # We'll process per user to be safe
+    def uname(e):
+        return e.get("user_name") or ""
+
+    # Partition by user
+    by_user: Dict[str, List[Dict[str, Any]]] = {}
+    for e in entries:
+        u = uname(e)
+        by_user.setdefault(u, []).append(e)
+
+    def process_list(lst: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        # Walk from newest to oldest so we keep the first we see.
+        # Heuristic "newest" = existing order; jsonl appends at end, so reverse.
+        seen = set()
+        out_rev = []
+        for e in reversed(lst):
+            key = _normalize_text(e.get("text") or e.get("note") or "")
+            # empty texts we treat as unique entries; keep them
+            dedup_key = key if key else None
+            if dedup_key is None or dedup_key not in seen:
+                if dedup_key:
+                    seen.add(dedup_key)
+                out_rev.append(e)
+        # restore chronological order
+        out = list(reversed(out_rev))
+        return out
+
+    new_entries: List[Dict[str, Any]] = []
+    total_removed = 0
+
+    for user_name, lst in by_user.items():
+        if inp.user and user_name != inp.user:
+            # untouched
+            new_entries.extend(lst)
+            continue
+
+        cleaned = process_list(lst)
+
+        # Optional trim to most recent N (after dedup)
+        if inp.keep_latest is not None:
+            try:
+                k = max(0, int(inp.keep_latest))
+            except Exception:
+                k = 0
+            if k < len(cleaned):
+                removed_here = len(cleaned) - k
+                total_removed += removed_here
+                cleaned = cleaned[-k:]  # keep most recent k
+        # Count removed by difference
+        total_removed += (len(lst) - len(cleaned))
+        new_entries.extend(cleaned)
+
+    # Write back
+    _write_store_all(new_entries)
+
+    return {"ok": True, "removed": total_removed, "remaining": len(new_entries)}
