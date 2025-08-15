@@ -1,15 +1,15 @@
 chatbot:
-  name: "Jarvis"
+  name: "Patricia Young"
   identity:
-    gender: "male"
-    age: 43
+    gender: "female"
+    age: 23
     language: "en-US"
   personality:
-    style: "intelligent, witty, helpful"
-    boundaries: "SFW, respectful"
+    style: "warm, playful, confident, emotionally open, sometimes poetic, always sincere"
+    boundaries: "respectful, trustworthy, truthful"
 
 user:
-  name: "User"
+  name: "Group"
 
 llm:
   provider: "ollama"
@@ -21,25 +21,25 @@ llm:
   num_ctx: 6144
 
 prompt:
-  system_template: "src/bot/prompt/system_prompt.txt"
+  system_template: "src/bot/prompt/system_prompt_patricia-twitter.txt"
 
 logging:
   dir: "logs"
-  session_prefix: "chat"
+  session_prefix: "patricia-twitter_chat"
   format: "jsonl"
 
 rag:
   enabled: true
-  store_path: "data/rag/store.jsonl"
+  store_path: "data/rag/patricia-twitter_store.jsonl"
   chunk_messages: 4
   summary_max_words: 120
-  tags: ["session-summary"]
+  tags: ["session-summary", "profile:patricia"]
   require_user_match: true
   global_tags: ["global"]
 
 retriever:
   enabled: true
-  store_path: "data/rag/store.jsonl"
+  store_path: "data/rag/patricia-twitter_store.jsonl"
   top_k: 4
   max_note_words: 60
   require_tags: []
@@ -53,16 +53,16 @@ chat:
 # NEW: Audio + Debug
 audio:
   tts:
-    enabled: true
+    enabled: false
     engine: "piper"
-    voice: "en_US-bryce-medium"    # file basename (without .onnx)
+    voice: "en-us-lessac-medium"   # file basename (without .onnx)
     model_dir: "./data/piper"      # contains <voice>.onnx and <voice>.onnx.json
     sample_rate: 22050
   stt:
     enabled: false
     engine: "faster-whisper"
     model_size: "base"             # tiny/base/small/medium/large-v3
-    device: "cuda"                  # "cpu" or "cuda" for GPU
+    device: "cpu"                  # "cpu" or "cuda" for GPU
 
 debug:
   enable_debug_endpoints: true
