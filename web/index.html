@@ -1,151 +1,393 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8"/>
-  <title>LocalAI Bot</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 24px auto; padding: 0 16px; }
-    .row { display: flex; gap: 8px; margin: 8px 0; }
-    textarea { width: 100%; height: 90px; }
-    input[type="text"], select { width: 100%; }
-    #log { white-space: pre-wrap; border: 1px solid #ddd; padding: 12px; border-radius: 8px; min-height: 200px; }
-    button { padding: 8px 12px; }
-    .muted { color: #666; font-size: 0.9em; }
-  </style>
+    <meta charset="utf-8"/>
+    <title>LocalAI Bot</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 900px;
+            margin: 24px auto;
+            padding: 0 16px;
+        }
+
+        .row {
+            display: flex;
+            gap: 8px;
+            margin: 8px 0;
+            flex-wrap: wrap;
+        }
+
+        textarea {
+            width: 100%;
+            height: 90px;
+        }
+
+        input[type="text"], select {
+            width: 100%;
+        }
+
+        #log {
+            white-space: pre-wrap;
+            border: 1px solid #ddd;
+            padding: 12px;
+            border-radius: 8px;
+            min-height: 220px;
+            background: #fafafa;
+        }
+
+        button {
+            padding: 8px 12px;
+        }
+
+        .muted {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        #player {
+            width: 100%;
+            margin-top: 8px;
+        }
+
+        pre {
+            background: #111;
+            color: #9f9;
+            padding: 8px;
+            border-radius: 6px;
+            overflow: auto;
+        }
+    </style>
 </head>
 <body>
-  <h1>LocalAI Bot</h1>
+<h1>LocalAI Bot</h1>
 
-  <div class="row">
+<div class="row">
     <input id="user" type="text" placeholder="Username" value="User"/>
     <input id="session" type="text" placeholder="Session (optional)"/>
-  </div>
+</div>
 
-  <div class="row">
+<div class="row">
     <label style="min-width: 90px;">Profile</label>
     <select id="profile"></select>
     <button onclick="applyProfile()">Apply Profile</button>
     <span id="profileActive" class="muted"></span>
-  </div>
+</div>
 
-  <div>
+<div class="row">
     <label><input type="checkbox" id="tts"> TTS</label>
     <label style="margin-left: 12px;"><input type="checkbox" id="stt"> STT</label>
     <button onclick="toggleFlags()">Apply</button>
     <span id="flags" class="muted"></span>
-  </div>
+</div>
 
-  <h3>Chat</h3>
-  <textarea id="msg" placeholder="Type a message…"></textarea>
-  <div class="row">
+<div class="row">
+    <button id="btnOpenViewer">🗔 Open Voice Viewer</button>
+    <button id="btnSpeak">🔊 Speak last reply</button>
+    <button id="btnRecord">🎤 Start Recording</button>
+    <button id="btnDebug">🪲 Debug</button>
+    <button id="btnDebugOpen">🪲 Open Debug JSON</button>
+    <button id="btnExport">⬇️ Export Memory</button>
+    <label>⬆️ Import Memory <input type="file" id="fileImport"/></label>
+</div>
+
+<audio id="player" controls style="display:none"></audio>
+
+<h3>Chat</h3>
+<textarea id="msg" placeholder="Type a message…"></textarea>
+<div class="row">
     <button onclick="send()">Send</button>
-  </div>
+</div>
 
-  <h3>Remember</h3>
-  <input id="fact" type="text" placeholder="Fact to remember. Use #tags like #global"/>
-  <div class="row">
+<h3>Remember</h3>
+<input id="fact" type="text" placeholder="Fact to remember. Use #tags like #global"/>
+<div class="row">
     <button onclick="remember()">Save Fact</button>
-  </div>
+</div>
 
-  <h3>Transcript</h3>
-  <div id="log"></div>
+<h3>Transcript</h3>
+<div id="log"></div>
 
-  <script>
+<h3 style="margin-top:16px;">Debug</h3>
+<pre id="debugOut" style="display:none"></pre>
+
+<script>
     async function loadProfiles() {
-      const res = await fetch('/profiles');
-      const data = await res.json();
-      const sel = document.getElementById('profile');
-      sel.innerHTML = '';
-      data.profiles.forEach(p => {
-        const opt = document.createElement('option');
-        opt.value = p;
-        opt.textContent = p;
-        if (p === data.active) opt.selected = true;
-        sel.appendChild(opt);
-      });
-      document.getElementById('profileActive').textContent = `active: ${data.active}`;
+        const res = await fetch('/profiles');
+        const data = await res.json();
+        const sel = document.getElementById('profile');
+        sel.innerHTML = '';
+        data.profiles.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p;
+            opt.textContent = p;
+            if (p === data.active) opt.selected = true;
+            sel.appendChild(opt);
+        });
+        document.getElementById('profileActive').textContent = `active: ${data.active}`;
     }
 
     async function applyProfile() {
-      const p = document.getElementById('profile').value;
-      const res = await fetch('/profile/select', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ profile: p })
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        appendLog("ERROR switching profile: " + t);
-        return;
-      }
-      const data = await res.json();
-      document.getElementById('profileActive').textContent = `active: ${data.active}`;
-      appendLog(`✓ Profile switched to ${data.active}.`);
+        const p = document.getElementById('profile').value;
+        const res = await fetch('/profile/select', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({profile: p})
+        });
+        if (!res.ok) {
+            const t = await res.text();
+            appendLog("ERROR switching profile: " + t);
+            return;
+        }
+        const data = await res.json();
+        document.getElementById('profileActive').textContent = `active: ${data.active}`;
+        appendLog(`✓ Profile switched to ${data.active}.`);
     }
 
     async function send() {
-      const user = document.getElementById('user').value || 'User';
-      const session = document.getElementById('session').value || null;
-      const message = document.getElementById('msg').value.trim();
-      if (!message) return;
+        const user = document.getElementById('user').value || 'User';
+        const session = document.getElementById('session').value || null;
+        const message = document.getElementById('msg').value.trim();
+        if (!message) return;
 
-      appendLog(user + ": " + message);
-      document.getElementById('msg').value = "";
+        appendLog(user + ": " + message);
+        document.getElementById('msg').value = "";
 
-      const res = await fetch('/chat', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ message, user, session })
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        appendLog("ERROR: " + t);
-        return;
-      }
-      const data = await res.json();
-      appendLog(`Assistant (${data.profile}): ` + data.answer);
-      document.getElementById('tts').checked = data.tts_enabled;
-      document.getElementById('stt').checked = data.stt_enabled;
-      document.getElementById('flags').textContent = `tts=${data.tts_enabled} stt=${data.stt_enabled}`;
+        const res = await fetch('/chat', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({message, user, session})
+        });
+        if (!res.ok) {
+            const t = await res.text();
+            appendLog("ERROR: " + t);
+            return;
+        }
+        const data = await res.json();
+        appendLog(`Assistant (${data.profile}): ` + data.answer);
+        document.getElementById('tts').checked = data.tts_enabled;
+        document.getElementById('stt').checked = data.stt_enabled;
+        document.getElementById('flags').textContent = `tts=${data.tts_enabled} stt=${data.stt_enabled}`;
     }
 
     async function remember() {
-      const user = document.getElementById('user').value || 'User';
-      const session = document.getElementById('session').value || null;
-      const text = document.getElementById('fact').value.trim();
-      if (!text) return;
-      document.getElementById('fact').value = "";
+        const user = document.getElementById('user').value || 'User';
+        const session = document.getElementById('session').value || null;
+        const text = document.getElementById('fact').value.trim();
+        if (!text) return;
+        document.getElementById('fact').value = "";
 
-      const res = await fetch('/remember', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ text, user, session })
-      });
-      const data = await res.json();
-      appendLog("✓ Remembered: " + data.stored.text + " [" + (data.stored.tags || []).join(", ") + "]");
+        const res = await fetch('/remember', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text, user, session})
+        });
+        const data = await res.json();
+        appendLog("✓ Remembered: " + data.stored.text + " [" + (data.stored.tags || []).join(", ") + "]");
     }
 
     async function toggleFlags() {
-      const tts = document.getElementById('tts').checked;
-      const stt = document.getElementById('stt').checked;
-      const res = await fetch('/toggle', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ tts, stt })
-      });
-      const data = await res.json();
-      document.getElementById('flags').textContent = `tts=${data.tts_enabled} stt=${data.stt_enabled}`;
+        const tts = document.getElementById('tts').checked;
+        const stt = document.getElementById('stt').checked;
+        const res = await fetch('/toggle', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({tts, stt})
+        });
+        const data = await res.json();
+        document.getElementById('flags').textContent = `tts=${data.tts_enabled} stt=${data.stt_enabled}`;
     }
 
+    // ---- New: Speak last reply ----
+    document.getElementById('btnSpeak').onclick = async () => {
+        const lastAssistant = [...document.querySelectorAll('#log')][0]
+            .textContent.split('\n')
+            .filter(l => l.startsWith('Assistant'))
+            .pop();
+        if (!lastAssistant) {
+            alert('No assistant reply to speak.');
+            return;
+        }
+        const text = lastAssistant.replace(/^Assistant.*?:\s*/, '').trim();
+        const resp = await fetch('/speak?' + new URLSearchParams({text}), {method: 'POST'});
+        if (!resp.ok) {
+            alert('TTS: ' + (await resp.text()));
+            return;
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.getElementById('player');
+        a.src = url;
+        a.style.display = 'block';
+        a.play();
+    };
+
+    // ---- New: Live STT (press, talk, release) ----
+    let mediaRec = null, chunks = [], currentStream = null, recording = false;
+
+    document.getElementById('btnRecord').onclick = async () => {
+        if (!document.getElementById('stt').checked) {
+            alert('Enable STT first.');
+            return;
+        }
+
+        if (!recording) {
+            // START
+            try {
+                currentStream = await navigator.mediaDevices.getUserMedia({audio: true});
+            } catch (e) {
+                appendLog('Mic error: ' + e);
+                return;
+            }
+            chunks = [];
+            mediaRec = new MediaRecorder(currentStream);
+            mediaRec.ondataavailable = ev => {
+                if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+            };
+            mediaRec.start();
+            recording = true;
+            document.getElementById('btnRecord').textContent = '⏹ Stop Recording';
+        } else {
+            // STOP
+            mediaRec.onstop = async () => {
+                try {
+                    const blob = new Blob(chunks, {type: mediaRec.mimeType || 'audio/webm'});
+                    if (!blob || blob.size < 4000) {
+                        appendLog('STT: recording too short or empty.');
+                        cleanupRec();
+                        return;
+                    }
+                    const file = new File([blob], 'audio.webm', {type: blob.type || 'audio/webm'});
+                    const fd = new FormData();
+                    fd.append('file', file);
+                    const r = await fetch('/transcribe', {method: 'POST', body: fd});
+                    if (!r.ok) {
+                        appendLog('STT ERROR: ' + await r.text());
+                        cleanupRec();
+                        return;
+                    }
+                    const js = await r.json();
+                    if (js.text) {
+                        document.getElementById('msg').value = js.text;
+                        send();
+                    } else {
+                        appendLog('STT: no text recognized.');
+                    }
+                } catch (e) {
+                    appendLog('STT exception: ' + e);
+                } finally {
+                    cleanupRec();
+                }
+            };
+            mediaRec.stop();
+        }
+    };
+
+    function cleanupRec() {
+        recording = false;
+        document.getElementById('btnRecord').textContent = '🎤 Start Recording';
+        try {
+            if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
+        } catch (e) {
+        }
+        mediaRec = null;
+        chunks = [];
+        if (currentStream) {
+            currentStream.getTracks().forEach(t => t.stop());
+            currentStream = null;
+        }
+    }
+
+    // ---- New: Debug ----
+    document.getElementById('btnDebug').onclick = async () => {
+        const user = document.getElementById('user').value || 'User';
+        const session = document.getElementById('session').value || 'api';
+        const url = '/debug/context?' + new URLSearchParams({user, session});
+        const r = await fetch(url);
+        if (!r.ok) {
+            appendLog('Debug: ' + await r.text());
+            return;
+        }
+        const js = await r.json();
+        const pre = document.getElementById('debugOut');
+        pre.textContent = JSON.stringify(js, null, 2);
+        pre.style.display = 'block';
+
+        // also show a quick summary in the log
+        appendLog(`🪲 Debug — profile=${js.active_profile}, user=${js.user_name}, session=${js.session}, turns=${(js.short_term_turns || []).length}`);
+    };
+
+    document.getElementById('btnDebugOpen').onclick = () => {
+        const user = document.getElementById('user').value || 'User';
+        const session = document.getElementById('session').value || 'api';
+        const url = '/debug/context?' + new URLSearchParams({user, session});
+        window.open(url, '_blank');
+    };
+
+    // ---- New: Export/Import Memory ----
+    document.getElementById('btnExport').onclick = async () => {
+        const r = await fetch('/memory/export');
+        if (!r.ok) {
+            alert('Export failed: ' + await r.text());
+            return;
+        }
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'rag_export.jsonl';
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    document.getElementById('fileImport').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const fd = new FormData();
+        fd.append('file', file);
+        const r = await fetch('/memory/import', {method: 'POST', body: fd});
+        if (!r.ok) {
+            alert('Import failed: ' + await r.text());
+            return;
+        }
+        const js = await r.json();
+        appendLog(`✓ Import ok (${js.bytes_appended} bytes).`);
+        e.target.value = '';
+    });
+
+    document.getElementById('btnOpenViewer').onclick = async () => {
+        const user = document.getElementById('user').value || 'User';
+        const session = document.getElementById('session').value || 'api';
+        const profile = document.getElementById('profile').value || 'default';
+        const tts = document.getElementById('tts').checked ? '1' : '0';
+        const stt = document.getElementById('stt').checked ? '1' : '0';
+
+        // Ask the server for the configured language
+        let lang = 'en-US';
+        try {
+            const r = await fetch('/debug/context?' + new URLSearchParams({user, session}));
+            if (r.ok) {
+                const js = await r.json();
+                lang = js.identity_language || lang;
+            }
+        } catch (e) {
+            // ignore and keep default
+            console.warn('debug/context fetch failed', e);
+        }
+
+        const url = '/static/viewer.html?' + new URLSearchParams({user, session, profile, tts, stt, lang});
+        window.open(url, '_blank');
+    };
+
     function appendLog(line) {
-      const el = document.getElementById('log');
-      el.textContent += (el.textContent ? "\n" : "") + line;
-      el.scrollTop = el.scrollHeight;
+        const el = document.getElementById('log');
+        el.textContent += (el.textContent ? "\n" : "") + line;
+        el.scrollTop = el.scrollHeight;
     }
 
     // init
     loadProfiles();
-  </script>
+</script>
 </body>
 </html>

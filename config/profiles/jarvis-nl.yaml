@@ -3,10 +3,10 @@ chatbot:
   identity:
     gender: "male"
     age: 43
-    language: "en-US"
+    language: "nl-BE"
   personality:
-    style: "intelligent, witty, helpful"
-    boundaries: "SFW, respectful"
+    style: "intelligent, geestig, behulpzaam"
+    boundaries: "SFW, respectvol"
 
 user:
   name: "User"
@@ -21,7 +21,7 @@ llm:
   num_ctx: 6144
 
 prompt:
-  system_template: "src/bot/prompt/system_prompt.txt"
+  system_template: "src/bot/prompt/system_prompt_jarvis-nl.txt"
 
 logging:
   dir: "logs"
@@ -30,7 +30,7 @@ logging:
 
 rag:
   enabled: true
-  store_path: "data/rag/store.jsonl"
+  store_path: "data/rag/jarvis-nl_store.jsonl"
   chunk_messages: 4
   summary_max_words: 120
   tags: ["session-summary"]
@@ -39,7 +39,7 @@ rag:
 
 retriever:
   enabled: true
-  store_path: "data/rag/store.jsonl"
+  store_path: "data/rag/jarvis-nl_store.jsonl"
   top_k: 4
   max_note_words: 60
   require_tags: []
@@ -55,7 +55,7 @@ audio:
   tts:
     enabled: true
     engine: "piper"
-    voice: "en_US-bryce-medium"    # file basename (without .onnx)
+    voice: "nl_BE-rdh-medium"    # file basename (without .onnx)
     model_dir: "./data/piper"      # contains <voice>.onnx and <voice>.onnx.json
     sample_rate: 22050
   stt:

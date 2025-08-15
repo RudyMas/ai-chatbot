@@ -1,3 +1,4 @@
+@echo off
 cd d:\ai-chatbot
-conda activate ai-chatbot
-uvicorn server.api:app --reload
+call conda activate ai-chatbot
+call uvicorn server.api:app --reload

@@ -12,6 +12,8 @@ class SessionBuffer:
     """Holds recent turns for a session to enable periodic summaries."""
     turns: List[Tuple[str, str]] = field(default_factory=list)  # list of (role, text)
     count: int = 0
+    # for debugging/transparency
+    last_injected_notes: List[str] = field(default_factory=list)
 
 state = RuntimeState()
 

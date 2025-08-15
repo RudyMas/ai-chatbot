@@ -1,0 +1,675 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8"/>
+    <title>Voice Viewer</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <style>
+        :root {
+            --bg: #0b0d10;
+            --panel: #101419;
+            --text: #e6eef8;
+            --muted: #9bb2ca;
+            --accent: #6aa9ff;
+            --ok: #34d399;
+            --warn: #f59e0b;
+            --danger: #ef4444;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, sans-serif;
+        }
+
+        .wrap {
+            display: grid;
+            grid-template-rows: 1fr 1fr auto;
+            height: 100vh;
+        }
+
+        .panel {
+            padding: 16px 18px;
+        }
+
+        .ai {
+            background: var(--panel);
+            border-bottom: 1px solid #151b22;
+        }
+
+        .user {
+            background: #0c1117;
+            border-top: 1px solid #151b22;
+        }
+
+        h2 {
+            margin: 0 0 10px 0;
+            font-weight: 600;
+            color: var(--muted);
+            letter-spacing: .3px;
+        }
+
+        .bubble {
+            background: #0f1520;
+            border: 1px solid #1b2430;
+            border-radius: 12px;
+            padding: 14px 16px;
+            font-size: 1.25rem;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            min-height: 72px;
+        }
+
+        .bubble.small {
+            font-size: 1.1rem;
+        }
+
+        .footer {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 12px;
+            align-items: center;
+            padding: 10px 16px;
+            background: #0c1117;
+            border-top: 1px solid #151b22;
+        }
+
+        .controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .controls label {
+            display: inline-flex;
+            gap: 8px;
+            align-items: center;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .btn {
+            background: #111827;
+            color: var(--text);
+            border: 1px solid #1f2937;
+            border-radius: 10px;
+            padding: 8px 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .btn[disabled] {
+            opacity: .5;
+            cursor: not-allowed;
+        }
+
+        .status {
+            font-size: .95rem;
+            color: var(--muted);
+            display: flex;
+            gap: 14px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px;
+        }
+
+        .dot.ok {
+            background: var(--ok);
+        }
+
+        .dot.off {
+            background: #374151;
+        }
+
+        .dot.speaking {
+            background: var(--warn);
+            box-shadow: 0 0 0 3px rgba(245, 158, 11, .2);
+        }
+
+        .mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #111827;
+            color: var(--text);
+            border: 1px solid #1f2937;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: .95rem;
+            display: none;
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="panel ai">
+        <h2>Assistant (last reply)</h2>
+        <div id="aiText" class="bubble"></div>
+    </div>
+    <div class="panel user">
+        <h2>User (last message)</h2>
+        <div id="userText" class="bubble small"></div>
+    </div>
+    <div class="footer">
+        <div class="controls">
+            <button id="btnStart" class="btn">▶️ Start Listening</button>
+            <label><input type="checkbox" id="chkMute"> Mute AI (store only)</label>
+            <label><input type="checkbox" id="chkStop"> Stop Listening</label>
+            <span><span class="dot off" id="dotListen"></span>Listening</span>
+            <span><span class="dot off" id="dotSpeak"></span>Speaking</span>
+        </div>
+        <div class="status">
+            <span id="stProfile" class="mono"></span>
+            <span id="stUser" class="mono"></span>
+            <span id="stSession" class="mono"></span>
+            <span id="stLang" class="mono"></span>
+            <span id="stFlags" class="mono"></span>
+            <span id="stTime" class="mono"></span>
+        </div>
+    </div>
+</div>
+<div id="toast" class="toast"></div>
+
+<audio id="player" preload="auto" style="display:none"></audio>
+
+<script>
+    // --- Query params & settings ---
+    const qp = new URLSearchParams(location.search);
+    const settings = {
+        user: qp.get('user') || 'User',
+        session: qp.get('session') || 'api',
+        profile: qp.get('profile') || 'default',
+        tts: /^(1|true|yes)$/i.test(qp.get('tts') || ''),
+        stt: /^(1|true|yes)$/i.test(qp.get('stt') || ''),
+        lang: qp.get('lang') || 'en-US', // passed from /debug/context.identity_language
+        pollMs: 1200,
+        maxChars: 300,
+        idleSec: 30,
+        idleCooldownSec: 120
+    };
+
+    // UI refs
+    const aiText = document.getElementById('aiText');
+    const userText = document.getElementById('userText');
+    const btnStart = document.getElementById('btnStart');
+    const chkMute = document.getElementById('chkMute');
+    const chkStop = document.getElementById('chkStop');
+    const dotListen = document.getElementById('dotListen');
+    const dotSpeak = document.getElementById('dotSpeak');
+    const stProfile = document.getElementById('stProfile');
+    const stUser = document.getElementById('stUser');
+    const stSession = document.getElementById('stSession');
+    const stLang = document.getElementById('stLang');
+    const stFlags = document.getElementById('stFlags');
+    const stTime = document.getElementById('stTime');
+    const player = document.getElementById('player');
+    const toast = document.getElementById('toast');
+
+    function setListen(on) {
+        dotListen.className = 'dot ' + (on ? 'ok' : 'off');
+    }
+
+    function setSpeak(on) {
+        dotSpeak.className = 'dot ' + (on ? 'speaking' : 'off');
+    }
+
+    function showToast(msg, ms = 2000) {
+        toast.textContent = msg;
+        toast.style.display = 'block';
+        setTimeout(() => toast.style.display = 'none', ms);
+    }
+
+    // status bar init
+    stProfile.textContent = `profile=${settings.profile}`;
+    stUser.textContent = `user=${settings.user}`;
+    stSession.textContent = `session=${settings.session}`;
+    stLang.textContent = `lang=${settings.lang}`;
+    stFlags.textContent = `tts=${settings.tts} stt=${settings.stt}`;
+
+    // --- Poll /debug/context for last turns ---
+    let pollTimer = null;
+
+    async function pollDebug() {
+        try {
+            const url = '/debug/context?' + new URLSearchParams({user: settings.user, session: settings.session});
+            const r = await fetch(url);
+            if (!r.ok) {
+                throw new Error(await r.text());
+            }
+            const js = await r.json();
+            const turns = js.short_term_turns || [];
+            // last assistant
+            for (let i = turns.length - 1; i >= 0; i--) {
+                if (turns[i][0] === 'assistant') {
+                    aiText.textContent = turns[i][1] || '';
+                    break;
+                }
+            }
+            // last user
+            for (let i = turns.length - 1; i >= 0; i--) {
+                if (turns[i][0] === 'user') {
+                    userText.textContent = turns[i][1] || '';
+                    break;
+                }
+            }
+            stProfile.textContent = `profile=${js.active_profile || settings.profile}`;
+            stFlags.textContent = `tts=${js.tts_enabled} stt=${js.stt_enabled}`;
+            stTime.textContent = new Date().toLocaleTimeString();
+        } catch (e) {
+            console.warn('debug/context error', e);
+        } finally {
+            pollTimer = setTimeout(pollDebug, settings.pollMs);
+        }
+    }
+
+    // --- Web Speech API (continuous with auto-restart) ---
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recog = null;
+    let listening = false;
+    let manualStop = false;
+    let interimText = '';
+    let lastHeardAt = 0;        // updated on interim/final results
+    let lastRecogEventAt = 0;   // any SR event
+    let restartBackoffMs = 400; // grows on repeated errors, capped
+    let idleInFlight = false;   // prevents duplicate idle nudges
+    let idleCooldownUntil = 0;  // absolute timestamp for cooldown end
+    let lastSpokeAt = 0;        // updated when TTS finishes
+    let idleTimer = null;       // handle for idle loop interval
+    let watchdogTimer = null;   // handle for the watchdog interval
+    let lastErrorAt = 0;        // throttle visible error toasts/logs
+    let micKeepalive = null;
+    let ttsActive = false;      // true while we’re preparing/playing TTS
+    let restartTimer = null;    // single pending restart timer
+    const RESTART_BACKOFF_MAX = 4000;
+    const WATCHDOG_IDLE_MS = 60000; // restart if no SR activity for this long (when not speaking)
+
+    function bumpActivity() {
+        lastRecogEventAt = Date.now();
+    }
+
+    function ensureRecog() {
+        if (!SR) {
+            showToast('Web Speech API not available');
+            return null;
+        }
+        if (recog) return recog;
+
+        const r = new SR();
+        r.lang = settings.lang;
+        r.continuous = true;
+        r.interimResults = true;
+        r.maxAlternatives = 1;
+
+        r.onstart = () => {
+            listening = true;
+            setListen(true);
+            bumpActivity();
+            restartBackoffMs = 400;
+        };
+        r.onaudiostart = bumpActivity;
+        r.onsoundstart = bumpActivity;
+        r.onspeechstart = bumpActivity;
+        r.onsoundend = bumpActivity;
+        r.onaudioend = bumpActivity;
+
+        r.onresult = (ev) => {
+            bumpActivity();
+            let finalText = '';
+            interimText = '';
+            for (let i = ev.resultIndex; i < ev.results.length; i++) {
+                const res = ev.results[i];
+                if (res.isFinal) finalText += res[0].transcript;
+                else interimText += res[0].transcript;
+            }
+            if (interimText) lastHeardAt = Date.now();
+            if (finalText.trim()) {
+                lastHeardAt = Date.now();
+                handleFinalTranscript(finalText.trim());
+            }
+        };
+
+        r.onerror = (ev) => {
+            // Keep a heartbeat so the watchdog knows SR is alive
+            bumpActivity();
+
+            // Harmless/transient cases: auto-restart quietly (no toast)
+            if (ev.error === 'no-speech' || ev.error === 'network' || ev.error === 'aborted' || ev.error === 'audio-capture') {
+                // Comment out the console line below if you want complete silence:
+                // console.debug('recog transient:', ev.error);
+                listening = false;
+                scheduleRecogRestart();
+                return;
+            }
+
+            // Anything else: throttle to one visible report per 10s
+            const now = Date.now();
+            if (now - lastErrorAt > 10000) {
+                console.warn('recog error', ev.error);
+                showToast('Speech error: ' + ev.error);
+                lastErrorAt = now;
+            }
+        };
+
+        r.onend = () => {
+            setListen(false);
+            bumpActivity();
+            listening = false;
+            // Auto-restart unless we stopped manually, tab hidden, or speaking
+            if (!manualStop && !document.hidden && !speaking()) {
+                scheduleRecogRestart();
+            }
+        };
+
+        recog = r;
+        return r;
+    }
+
+    function scheduleRecogRestart() {
+        if (manualStop || ttsActive) return;        // <— block during TTS
+        const delay = restartBackoffMs;
+        restartBackoffMs = Math.min(restartBackoffMs * 2, RESTART_BACKOFF_MAX);
+
+        if (restartTimer) {
+            clearTimeout(restartTimer);
+        }  // <— collapse to one timer
+        restartTimer = setTimeout(() => {
+            restartTimer = null;
+            tryStartRecog();
+        }, delay);
+    }
+
+    async function tryStartRecog() {
+        const r = ensureRecog();
+        if (!r) return;
+        if (listening) return;
+        if (chkStop.checked || document.hidden || speaking()) return;
+        try {
+            manualStop = false;
+            r.lang = settings.lang;
+            r.start();
+            listening = true;
+        } catch (e) {
+            console.warn('recog start error', e);
+            scheduleRecogRestart();
+        }
+    }
+
+    function stopRecog(manual = true) {
+        if (recog) {
+            try {
+                recog.stop();
+            } catch (_) {
+            }
+        }
+        listening = false;
+        manualStop = manual;
+        stopMicKeepalive();
+        setListen(false);
+    }
+
+    // --- TTS helper ---
+    function speaking() {
+        return ttsActive || (!player.paused && !player.ended);
+    }
+
+    async function speak(text) {
+        try {
+            ttsActive = true;
+            setSpeak(true);
+            stopRecog(false); // pause listening during TTS
+            setListen(false);          // <— force dot off during TTS
+
+            const resp = await fetch('/speak?' + new URLSearchParams({text}), {method: 'POST'});
+            if (!resp.ok) {
+                showToast('TTS error');
+                setSpeak(false);
+                return;
+            }
+            const blob = await resp.blob();
+            const url = URL.createObjectURL(blob);
+            player.src = url;
+            await player.play().catch(() => {
+            });
+        } catch (e) {
+            console.warn('speak error', e);
+            ttsActive = false;
+        }
+    }
+
+    player.addEventListener('ended', () => {
+        setSpeak(false);
+        ttsActive = false;
+        lastSpokeAt = Date.now();
+        if (!chkStop.checked) tryStartRecog(); // resume listening
+    });
+
+    player.addEventListener('error', () => {
+        setSpeak(false);
+        ttsActive = false;           // <— add
+    });
+
+    // --- Chat / Remember flow ---
+    async function handleFinalTranscript(text) {
+        lastHeardAt = Date.now();
+        const clipped = text.length > settings.maxChars ? (text.slice(0, settings.maxChars) + '…') : text;
+
+        if (chkMute.checked) {
+            // Store only
+            const body = {text: clipped + " #voice #viewer", user: settings.user, session: settings.session};
+            const r = await fetch('/remember', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            });
+            if (!r.ok) {
+                console.warn('remember fail', await r.text());
+            }
+            return;
+        }
+
+        // Ask model
+        const body = {message: clipped, user: settings.user, session: settings.session};
+        const r = await fetch('/chat', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        if (!r.ok) {
+            showToast('Chat error');
+            return;
+        }
+        const js = await r.json();
+        if (settings.tts) {
+            await speak(js.answer || '');
+        } else {
+            lastSpokeAt = Date.now();
+        }
+    }
+
+    // --- Idle nudge (single-fire with lock + cooldown) ---
+    function startIdleLoop() {
+        clearInterval(idleTimer);
+        idleTimer = setInterval(async () => {
+            const now = Date.now();
+
+            // Skip if not listening, muted, stopped, hidden, or currently speaking
+            if (manualStop || chkMute.checked || chkStop.checked || document.hidden || speaking()) return;
+
+            // Respect cooldown
+            if (now < idleCooldownUntil) return;
+
+            // Silence duration = since last user speech AND since last AI speech
+            const silentFor = Math.min(
+                now - (lastHeardAt || 0),
+                now - (lastSpokeAt || 0)
+            );
+
+            if (!idleInFlight && silentFor >= settings.idleSec * 1000) {
+                idleInFlight = true; // lock immediately
+                idleCooldownUntil = now + settings.idleCooldownSec * 1000; // set cooldown immediately
+
+                try {
+                    const prompt = "No one has spoken for 30 seconds; say something brief and relevant.";
+                    const body = {message: prompt, user: settings.user, session: settings.session};
+                    const r = await fetch('/chat', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(body)
+                    });
+                    if (r.ok) {
+                        const js = await r.json();
+                        if (settings.tts) await speak(js.answer || '');
+                        else lastSpokeAt = Date.now();
+                    }
+                } catch (e) {
+                    console.warn('idle nudge error', e);
+                } finally {
+                    idleInFlight = false; // release lock
+                }
+            }
+        }, 1000);
+    }
+
+    // --- Recognition watchdog: restart if silent too long (and not speaking) ---
+    function startWatchdog() {
+        stopWatchdog();
+        watchdogTimer = setInterval(() => {
+            // If the user manually stopped, or tab hidden, or we’re speaking, do nothing
+            if (manualStop || document.hidden || speaking()) return; // speaking() now covers TTS
+
+            const now = Date.now();
+            // If we haven't seen SR activity for a while, restart it
+            if (now - lastRecogEventAt > WATCHDOG_IDLE_MS) {
+                try {
+                    stopRecog(false);
+                } catch (_) {
+                }
+                scheduleRecogRestart();
+            }
+        }, 2000);
+    }
+
+    function stopWatchdog() {
+        if (watchdogTimer) {
+            clearInterval(watchdogTimer);
+            watchdogTimer = null;
+        }
+    }
+
+    function startListeningTimers() {
+        // Grace period so the idle loop doesn’t fire immediately
+        idleCooldownUntil = Date.now() + settings.idleSec * 1000;
+        idleInFlight = false;
+
+        startIdleLoop();
+        startWatchdog();
+    }
+
+    function stopListeningTimers() {
+        if (idleTimer) {
+            clearInterval(idleTimer);
+            idleTimer = null;
+        }
+        stopWatchdog();
+    }
+
+    // --- Start/Stop button & checkboxes ---
+    btnStart.addEventListener('click', () => {
+        if (!listening) {
+            tryStartRecog();
+            startMicKeepalive();
+            idleCooldownUntil = Date.now() + settings.idleSec * 1000; // grace
+            startListeningTimers();
+            btnStart.textContent = '⏹ Stop Listening';
+        } else {
+            stopRecog(true);
+            stopListeningTimers();
+            btnStart.textContent = '▶️ Start Listening';
+        }
+    });
+
+    chkStop.addEventListener('change', () => {
+        if (chkStop.checked) {
+            stopRecog(true);
+            stopListeningTimers();
+            btnStart.textContent = '▶️ Start Listening';
+        } else {
+            tryStartRecog();
+            startMicKeepalive();
+            idleCooldownUntil = Date.now() + settings.idleSec * 1000; // grace
+            startListeningTimers();
+            btnStart.textContent = '⏹ Stop Listening';
+        }
+    });
+
+    // --- Visibility handling ---
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            if (listening) stopRecog(false);
+            stopListeningTimers();
+        } else {
+            if (!chkStop.checked) {
+                tryStartRecog();
+                startMicKeepalive();
+                // Grace period on resume
+                idleCooldownUntil = Date.now() + settings.idleSec * 1000;
+                startListeningTimers();
+            }
+        }
+    });
+
+    async function startMicKeepalive() {
+        if (micKeepalive) return;
+        try {
+            micKeepalive = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            });
+            // We don't attach it anywhere; just keeping the track open
+        } catch (e) {
+            // Non-fatal; Web Speech will still run without this
+            // console.debug('keepalive mic denied', e);
+        }
+    }
+
+    function stopMicKeepalive() {
+        if (!micKeepalive) return;
+        try {
+            micKeepalive.getTracks().forEach(t => t.stop());
+        } catch (_) {
+        }
+        micKeepalive = null;
+    }
+
+    // --- Init ---
+    (function init() {
+        pollDebug();
+        if (settings.stt) {
+            showToast('Press “Start Listening” to begin.');
+        }
+    })();
+</script>
+</body>
+</html>
