@@ -13,6 +13,8 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Body
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from bot.llm.ollama import get_last_ollama_payload
 
 from bot.config import load_config, get_system_template_path, UserConfig
 from bot.llm.ollama import generate_chat
@@ -541,6 +543,18 @@ def debug_context(session: Optional[str] = None, user: Optional[str] = None, rag
         "identity_name": identity_name,
         "system_template_path": str(TEMPLATE_PATH),
     }
+
+
+@app.get("/debug/last_ollama_payload")
+def debug_last_ollama_payload():
+    """
+    Return the most recent Ollama request we sent (endpoint + payload + timestamp).
+    Helpful for verifying system prompt, messages, options, etc.
+    """
+    rec = get_last_ollama_payload()
+    if rec is None:
+        return JSONResponse({"ok": False, "message": "No Ollama payload recorded yet."}, status_code=404)
+    return JSONResponse(rec)
 
 
 # ---------- New: Memory export/import ----------

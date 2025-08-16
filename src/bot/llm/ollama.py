@@ -3,6 +3,7 @@ import requests
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 from datetime import datetime
+from threading import Lock  # NEW
 
 # Prefer stdlib zoneinfo if available (Py3.9+); otherwise fall back to naive time
 try:
@@ -12,16 +13,31 @@ except Exception:  # pragma: no cover
 
 from bot.config import AppConfig
 
+# ---------- NEW: simple recorder for last Ollama payload ----------
+_LAST_LOCK = Lock()
+_LAST_RECORD: Dict[str, Any] | None = None
+
+def _record_last(endpoint: str, payload: Dict[str, Any]) -> None:
+    """Store the last Ollama request we sent, with timestamp & endpoint."""
+    global _LAST_RECORD
+    with _LAST_LOCK:
+        _LAST_RECORD = {
+            "recorded_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "endpoint": endpoint,
+            "payload": payload,
+        }
+
+def get_last_ollama_payload() -> Dict[str, Any] | None:
+    """Safe accessor for debugging via /debug/last_ollama_payload."""
+    with _LAST_LOCK:
+        # Return a shallow copy (payload is JSON-serializable dict)
+        return dict(_LAST_RECORD) if _LAST_RECORD is not None else None
+# -------------------------------------------------------------------
 
 def _read_text(path: str | Path) -> str:
     return Path(path).read_text(encoding="utf-8")
 
-
 def _resolve_timezone(cfg: AppConfig) -> str:
-    """
-    Read timezone from config at chatbot.identity.timezone.
-    Falls back to 'Europe/Brussels' if not set.
-    """
     try:
         tz = getattr(getattr(cfg.chatbot, "identity", None), "timezone", None)
         if tz:
@@ -30,30 +46,18 @@ def _resolve_timezone(cfg: AppConfig) -> str:
         pass
     return "Europe/Brussels"
 
-
 def _now_string(tz_name: str) -> str:
-    """
-    Return a human-friendly "YYYY-MM-DD HH:MM (TZNAME)" timestamp.
-    Uses zoneinfo if available; otherwise uses local naive time.
-    """
     if ZoneInfo is not None:
         try:
             tz = ZoneInfo(tz_name)
             now = datetime.now(tz)
             return f"{now:%Y-%m-%d %H:%M} ({tz_name})"
         except Exception:
-            pass  # fall through to naive
+            pass
     now = datetime.now()
     return f"{now:%Y-%m-%d %H:%M} ({tz_name})"
 
-
 def render_system_prompt(cfg: AppConfig, template_path: str) -> str:
-    """
-    Render your system template placeholders, then prefix a visible temporal header
-    so the model reliably sees & uses the current time.
-    Placeholders supported (as before):
-      {{name}}, {{gender}}, {{age}}, {{language}}, {{style}}, {{boundaries}}, {{user_name}}
-    """
     base = _read_text(template_path)
     ctx = {
         "name": cfg.chatbot.identity.name,
@@ -67,7 +71,7 @@ def render_system_prompt(cfg: AppConfig, template_path: str) -> str:
     for k, v in ctx.items():
         base = base.replace(f"{{{{{k}}}}}", v)
 
-    # Strong, top-of-prompt temporal header (models notice this better than an appendix)
+    # Strong, top-of-prompt temporal header
     tz_name = _resolve_timezone(cfg)
     now_str = _now_string(tz_name)
     time_header = (
@@ -77,16 +81,13 @@ def render_system_prompt(cfg: AppConfig, template_path: str) -> str:
         "- If asked for the current time or date, use this value.\n"
         "- Do not say you cannot access the current time.\n\n"
     )
-
     return time_header + base.strip()
-
 
 def _options(cfg: AppConfig) -> Dict[str, Any]:
     opts: Dict[str, Any] = {
         "temperature": cfg.llm.temperature,
         "num_predict": cfg.llm.max_tokens,
     }
-    # optional context window if present in config
     if hasattr(cfg.llm, "num_ctx"):
         try:
             num_ctx = int(getattr(cfg.llm, "num_ctx"))
@@ -95,7 +96,6 @@ def _options(cfg: AppConfig) -> Dict[str, Any]:
         except Exception:
             pass
     return opts
-
 
 def generate(prompt: str, cfg: AppConfig, system_template_path: str) -> str:
     """Single-turn call (no history) via /api/generate."""
@@ -108,6 +108,9 @@ def generate(prompt: str, cfg: AppConfig, system_template_path: str) -> str:
         "stream": False,
         "options": _options(cfg),
     }
+
+    _record_last(url, payload)  # NEW: record what we send
+
     r = requests.post(url, json=payload, timeout=cfg.llm.request_timeout)
     if not r.ok:
         try:
@@ -117,7 +120,6 @@ def generate(prompt: str, cfg: AppConfig, system_template_path: str) -> str:
         raise RuntimeError(f"Ollama error {r.status_code}: {err}")
     data = r.json()
     return (data.get("response") or "").strip()
-
 
 def generate_chat(history: List[Tuple[str, str]], user_message: str, cfg: AppConfig, system_template_path: str) -> str:
     """
@@ -140,6 +142,9 @@ def generate_chat(history: List[Tuple[str, str]], user_message: str, cfg: AppCon
         "stream": False,
         "options": _options(cfg),
     }
+
+    _record_last(url, payload)  # NEW: record what we send
+
     r = requests.post(url, json=payload, timeout=cfg.llm.request_timeout)
     if not r.ok:
         try:
@@ -148,6 +153,5 @@ def generate_chat(history: List[Tuple[str, str]], user_message: str, cfg: AppCon
             err = r.text
         raise RuntimeError(f"Ollama error {r.status_code}: {err}")
     data = r.json()
-    # /api/chat returns {"message":{"role":"assistant","content":"..."},"done":true,...}
     msg = data.get("message") or {}
     return (msg.get("content") or "").strip()

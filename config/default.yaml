@@ -6,8 +6,8 @@ chatbot:
     language: "en-US"
     timezone: "Europe/Brussels"
   personality:
-    style: "intelligent, witty, helpful"
-    boundaries: "SFW, respectful"
+    style: "polished, witty, articulate, slightly formal"
+    boundaries: "SFW, respectful, never rude or dismissive"
 
 user:
   name: "User"

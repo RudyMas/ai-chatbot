@@ -14,6 +14,10 @@ Built for friendly conversations with a persistent personality, voice interactio
 - 🎤 **Live recording** — Press-to-record transcription via browser.
 - 🔄 **Profile switching** — Change personality instantly.
 - 💾 **Long-term storage** — JSONL memory file per user/session.
+- 🌐 **Web UIs**:
+  - `index.html` — Control center (profiles, TTS/STT, memory tools).
+  - `viewer.html` — Voice-first interface with continuous listening.
+  - `chat.html` — Chat-only interface, similar to ChatGPT.
 
 ---
 
@@ -58,14 +62,39 @@ pip install ctranslate2
 
 ---
 
-## ⚙️ Configuration
+## ⚙️ Profiles
 
-Profiles are stored in:
-```
-config/profiles/<profile-name>.yaml
+This project uses YAML-based profiles to define the AI’s persona.  
+By default, the assistant is configured as **Jarvis**, an intelligent and witty AI helper.
+
+### Example profile (`config/default.yaml`)
+
+```yaml
+chatbot:
+  name: "Jarvis"
+  identity:
+    gender: "male"
+    age: 43
+    language: "en-US"
+    timezone: "Europe/Brussels"
+  personality:
+    style: "polished, witty, articulate, slightly formal"
+    boundaries: "SFW, respectful, never rude or dismissive"
+
+user:
+  name: "User"
 ```
 
-You can find the default profile for Jarvis in `config/default.yaml`.`
+### Creating your own persona
+
+You can easily create your own AI personality:
+
+Copy `config/default.yaml` to a new file, e.g. `config/profiles/alice.yaml`.  
+Edit the `chatbot` section to define:
+
+- **name** → the assistant’s name  
+- **identity** → gender, age, language, timezone  
+- **personality** → style and boundaries  
 
 ---
 
@@ -76,33 +105,48 @@ The system prompt is defined in:
 src/bot/prompt/system_prompt.txt
 ```
 
-This is the initial context Jarvis uses to understand his role and capabilities. You can customize it to change how Jarvis interacts with users.
-You can also add additional context in `config/profiles/<profile-name>.yaml` under the `context` key.
+This is the initial context Jarvis uses to understand his role and capabilities.  
+You can customize it to change how Jarvis interacts with users.
+
+You can also add extra context in `config/profiles/<profile-name>.yaml` under the `context` key.
 
 ---
 
 ## ▶️ Running the server
 
 ```bash
-  uvicorn server.api:app --reload
+uvicorn server.api:app --reload
 ```
 
 ---
 
 ## 🌐 Using the Web UI
 
-1. Open your browser to:
-   ```
-   http://127.0.0.1:8000/static/index.html
-   ```
-2. Enter your username and optionally a session ID.
-3. Choose your profile and enable **TTS** / **STT** as needed.
-4. Use the buttons to:
-   - 🎤 Start/Stop recording
-   - 🔊 Replay last reply
-   - 🪲 Debug / view context
-   - ⬇️ Export memory
-   - ⬆️ Import memory
+Open in your browser:
+
+- **Main control panel:**  
+  [http://127.0.0.1:8000/static/index.html](http://127.0.0.1:8000/static/index.html)
+
+Recommended on starting this page first to set up your profile and TTS/STT settings and from there you can access the other UIs.
+This way you are sure the right profile is selected and the TTS/STT settings are configured.
+
+- **Voice Viewer (hands-free):**  
+  [http://127.0.0.1:8000/static/viewer.html](http://127.0.0.1:8000/static/viewer.html)
+
+To make sure the UI works correctly, you may need to allow microphone access in your browser settings.
+
+- **Chat UI (text only):**  
+  [http://127.0.0.1:8000/static/chat.html](http://127.0.0.1:8000/static/chat.html)
+
+### Controls in `index.html`
+
+- 🎤 Start/Stop recording
+- 🔊 Replay last reply
+- 🪲 Debug / view context
+- ⬇️ Export memory
+- ⬆️ Import memory
+- 🗔 Open **Voice Viewer**
+- 💬 Open **Chat UI**
 
 ---
 
