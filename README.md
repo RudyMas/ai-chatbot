@@ -35,30 +35,77 @@ Built for friendly conversations with a persistent personality, voice interactio
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/RudyMas/ai-chatbot.git
-cd ai-chatbot
+  git clone https://github.com/RudyMas/ai-chatbot.git
+  cd ai-chatbot
 ```
 
 ### 2. Create a Conda environment
 
 ```bash
-conda create -n ai-chatbot python=3.11
-conda activate ai-chatbot
+  conda create -n ai-chatbot python=3.11
+  conda activate ai-chatbot
 ```
 
 ### 3. Install dependencies
 
 #### Base environment
 ```bash
-pip install -e .
+  pip install -e .
 ```
 
 #### For GPU-accelerated STT (optional, NVIDIA only)
 ```bash
-nvidia-smi  # Check your CUDA version
-conda install -c nvidia cuda-runtime=12.x cudnn=9.1
-pip install ctranslate2
+  nvidia-smi  # Check your CUDA version
+  conda install -c nvidia cuda-runtime=12.x cudnn=9.1
+  pip install ctranslate2
 ```
+
+If you don't have an NVIDIA GPU, you can skip the CUDA installation and just use CPU-based STT.
+
+Don't forget to change the `stt` section in your profile to use CPU STT:
+```yaml
+  stt:
+    enabled: false
+    engine: "faster-whisper"
+    model_size: "base"             # tiny/base/small/medium/large-v3
+    device: "cuda"                 # "cpu" or "cuda" for GPU
+```
+
+---
+
+## Installing Ollama & Models
+
+This project uses [Ollama](https://ollama.ai) to run local large language models (LLMs).
+
+**Install Ollama**  
+- Download and install Ollama for your platform from [ollama.ai/download](https://ollama.ai/download).  
+- On Windows, you may need to restart your terminal after installation.
+
+**Verify Installation**  
+
+Run the following in a terminal to confirm Ollama is installed and running:  
+```bash
+  ollama --version
+  ollama list
+```
+
+**Download a Model**  
+
+This project is configured to use `CognitiveComputations/dolphin-mistral-nemo` by default (see `default.yaml`).  
+You can pull it with:  
+```bash
+  ollama pull CognitiveComputations/dolphin-mistral-nemo
+```  
+Or pick another model from the [Ollama model library](https://ollama.ai/library).
+
+**Update your config**  
+
+In `config/profiles/default.yaml`, set:
+```yaml
+  llm:
+    model: "your/model:name"
+```
+Restart the server after making changes.
 
 ---
 
@@ -70,19 +117,19 @@ By default, the assistant is configured as **Jarvis**, an intelligent and witty 
 ### Example profile (`config/default.yaml`)
 
 ```yaml
-chatbot:
-  name: "Jarvis"
-  identity:
-    gender: "male"
-    age: 43
-    language: "en-US"
-    timezone: "Europe/Brussels"
-  personality:
-    style: "polished, witty, articulate, slightly formal"
-    boundaries: "SFW, respectful, never rude or dismissive"
+  chatbot:
+    name: "Jarvis"
+    identity:
+      gender: "male"
+      age: 43
+      language: "en-US"
+      timezone: "Europe/Brussels"
+    personality:
+      style: "polished, witty, articulate, slightly formal"
+      boundaries: "SFW, respectful, never rude or dismissive"
 
-user:
-  name: "User"
+  user:
+    name: "User"
 ```
 
 ### Creating your own persona
@@ -102,20 +149,25 @@ Edit the `chatbot` section to define:
 
 The system prompt is defined in:
 ```
-src/bot/prompt/system_prompt.txt
+  src/bot/prompt/system_prompt.txt
 ```
 
 This is the initial context Jarvis uses to understand his role and capabilities.  
 You can customize it to change how Jarvis interacts with users.
 
-You can also add extra context in `config/profiles/<profile-name>.yaml` under the `context` key.
+You can create different system prompts for different profiles by creating a new file in the same directory, e.g. `system_prompt_alice.txt`, and then referencing it in your profile:
+
+```yaml
+  llm:
+    system_prompt: "src/bot/prompt/system_prompt_alice.txt"
+```
 
 ---
 
 ## ▶️ Running the server
 
 ```bash
-uvicorn server.api:app --reload
+  uvicorn server.api:app --reload
 ```
 
 ---
