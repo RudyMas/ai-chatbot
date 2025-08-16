@@ -84,6 +84,7 @@
 
 <div class="row">
     <button id="btnOpenViewer">🗔 Open Voice Viewer</button>
+    <button id="btnOpenChat">💬 Open Chat</button>
     <button id="btnSpeak">🔊 Speak last reply</button>
     <button id="btnRecord">🎤 Start Recording</button>
     <button id="btnDebug">🪲 Debug</button>
@@ -389,6 +390,29 @@
         const url = '/static/viewer.html?' + new URLSearchParams({user, session, profile, tts, stt, lang});
         window.open(url, '_blank');
     };
+
+    document.getElementById('btnOpenChat').onclick = async () => {
+        const user = document.getElementById('user').value || 'User';
+        const session = document.getElementById('session').value || 'api';
+        const profile = document.getElementById('profile').value || 'default';
+        const tts = document.getElementById('tts').checked ? '1' : '0';
+        const stt = document.getElementById('stt').checked ? '1' : '0';
+
+        // try to fetch identity language from /debug/context (optional)
+        let lang = 'en-US';
+        try {
+            const r = await fetch('/debug/context?' + new URLSearchParams({user, session}));
+            if (r.ok) {
+                const js = await r.json();
+                lang = js.identity_language || lang;
+            }
+        } catch (_) {
+        }
+
+        const url = '/static/chat.html?' + new URLSearchParams({user, session, profile, tts, stt, lang});
+        window.open(url, '_blank');
+    };
+
 
     function appendLog(line) {
         const el = document.getElementById('log');

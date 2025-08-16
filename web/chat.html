@@ -1,0 +1,279 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Chat</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <style>
+    :root{
+      --bg:#0b0d10; --panel:#101419; --muted:#9bb2ca; --text:#e6eef8; --accent:#6aa9ff; --border:#1a2230;
+      --user:#0f1724; --assistant:#0f1520; --chip:#0d1117;
+    }
+    *{ box-sizing: border-box; }
+    html,body{ height:100%; }
+    body{
+      margin:0; background:var(--bg); color:var(--text);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, sans-serif;
+      display:grid; grid-template-rows:auto 1fr auto;
+    }
+    .topbar{
+      display:flex; align-items:center; gap:12px; padding:10px 14px;
+      background:var(--panel); border-bottom:1px solid var(--border);
+      flex-wrap:wrap;
+    }
+    .chip{ background:var(--chip); border:1px solid var(--border); border-radius:10px; padding:6px 10px; color:var(--muted); font-size:12.5px; }
+    .spacer{ flex:1; }
+    .btn{
+      background:#111827; color:var(--text); border:1px solid var(--border); border-radius:10px; padding:8px 12px; font-weight:600; cursor:pointer;
+    }
+    .btn[disabled]{ opacity:.55; cursor:not-allowed; }
+    .main{
+      overflow:auto; padding:16px 0;
+    }
+    .container{ max-width:920px; margin:0 auto; padding:0 16px; }
+    .msg{
+      display:grid; grid-template-columns:48px 1fr; gap:12px; padding:14px; border-bottom:1px solid var(--border);
+    }
+    .msg.assistant{ background:var(--assistant); }
+    .msg.user{ background:var(--user); }
+    .avatar{
+      width:40px; height:40px; border-radius:8px; background:#0e1320; border:1px solid var(--border);
+      display:grid; place-items:center; color:var(--muted); font-weight:700;
+    }
+    .role{ font-size:12px; color:var(--muted); margin-bottom:4px; }
+    .text{ white-space:pre-wrap; line-height:1.55; font-size:16px; }
+    .footer{
+      background:var(--panel); border-top:1px solid var(--border);
+      padding:10px 14px;
+    }
+    .inputWrap{
+      max-width:920px; margin:0 auto; display:grid; gap:10px;
+    }
+    textarea{
+      width:100%; min-height:80px; max-height:50vh; padding:12px 14px; resize:vertical;
+      border-radius:12px; background:#0d1117; color:var(--text); border:1px solid var(--border); line-height:1.5; font-size:15px;
+      outline:none;
+    }
+    .row{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .muted{ color:var(--muted); font-size:12.5px; }
+    .toast{
+      position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
+      background:#111827; border:1px solid var(--border); color:var(--text);
+      padding:8px 12px; border-radius:8px; display:none; z-index:10;
+    }
+    a{ color:var(--accent); text-decoration:none; }
+    .smallInputs input{ background:#0d1117; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:6px 8px; }
+  </style>
+</head>
+<body>
+  <!-- Top bar -->
+  <div class="topbar">
+    <span id="chipProfile" class="chip"></span>
+    <span id="chipUser" class="chip"></span>
+    <span id="chipSession" class="chip"></span>
+    <span id="chipLang" class="chip"></span>
+    <span class="spacer"></span>
+    <button id="btnNew" class="btn">🧹 New chat</button>
+    <button id="btnRemember" class="btn">🧠 Remember</button>
+    <span class="muted">Shift+Enter = newline • Enter = send</span>
+  </div>
+
+  <!-- Messages -->
+  <div id="scroller" class="main">
+    <div id="list" class="container"></div>
+  </div>
+
+  <!-- Composer -->
+  <div class="footer">
+    <div class="inputWrap">
+      <textarea id="composer" placeholder="Message Patricia…"></textarea>
+      <div class="row">
+        <button id="btnSend" class="btn">Send</button>
+        <div id="status" class="muted">Ready.</div>
+        <span class="spacer"></span>
+        <div class="row smallInputs">
+          <label class="muted">/remember:
+            <input id="rememberInput" type="text" placeholder="Fact to store (supports #tags)" size="32"/>
+          </label>
+          <button id="btnDoRemember" class="btn">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    // --- Settings from query params (same as viewer.html) ---
+    const qp = new URLSearchParams(location.search);
+    const settings = {
+      user: qp.get('user') || 'User',
+      session: qp.get('session') || 'api',
+      profile: qp.get('profile') || 'default',
+      tts: /^(1|true|yes)$/i.test(qp.get('tts') || ''),
+      stt: /^(1|true|yes)$/i.test(qp.get('stt') || ''),
+      lang: qp.get('lang') || 'en-US',
+      pollMs: 1200
+    };
+
+    // UI refs
+    const chipProfile = document.getElementById('chipProfile');
+    const chipUser = document.getElementById('chipUser');
+    const chipSession = document.getElementById('chipSession');
+    const chipLang = document.getElementById('chipLang');
+    const list = document.getElementById('list');
+    const scroller = document.getElementById('scroller');
+    const composer = document.getElementById('composer');
+    const btnSend = document.getElementById('btnSend');
+    const btnNew = document.getElementById('btnNew');
+    const btnRemember = document.getElementById('btnRemember');
+    const rememberInput = document.getElementById('rememberInput');
+    const btnDoRemember = document.getElementById('btnDoRemember');
+    const statusEl = document.getElementById('status');
+    const toast = document.getElementById('toast');
+
+    function showToast(msg, ms=1800){
+      toast.textContent = msg;
+      toast.style.display = 'block';
+      setTimeout(()=> toast.style.display = 'none', ms);
+    }
+
+    // Chips
+    chipProfile.textContent = `profile=${settings.profile}`;
+    chipUser.textContent = `user=${settings.user}`;
+    chipSession.textContent = `session=${settings.session}`;
+    chipLang.textContent = `lang=${settings.lang}`;
+
+    // --- Basic message rendering ---
+    function renderMsg(role, text){
+      const wrap = document.createElement('div');
+      wrap.className = `msg ${role}`;
+      const avatar = document.createElement('div');
+      avatar.className = 'avatar';
+      avatar.textContent = role === 'assistant' ? 'A' : 'U';
+      const body = document.createElement('div');
+      const roleEl = document.createElement('div');
+      roleEl.className = 'role';
+      roleEl.textContent = role === 'assistant' ? 'Patricia' : settings.user;
+      const textEl = document.createElement('div');
+      textEl.className = 'text';
+      textEl.textContent = text || '';
+      body.appendChild(roleEl);
+      body.appendChild(textEl);
+      wrap.appendChild(avatar);
+      wrap.appendChild(body);
+      list.appendChild(wrap);
+      // auto-scroll
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+
+    function setStatus(t){ statusEl.textContent = t; }
+
+    // --- Send message to /chat ---
+    async function sendMessage(text){
+      const msg = (text || '').trim();
+      if (!msg) return;
+      renderMsg('user', msg);
+      setStatus('Thinking…');
+      btnSend.disabled = true;
+
+      try{
+        const body = { message: msg, user: settings.user, session: settings.session };
+        const r = await fetch('/chat', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body)
+        });
+        if (!r.ok){
+          const t = await r.text();
+          renderMsg('assistant', `⚠️ Error: ${t}`);
+          showToast('Chat error');
+          return;
+        }
+        const js = await r.json();
+        renderMsg('assistant', js.answer || '');
+      } catch(e){
+        renderMsg('assistant', '⚠️ Network error.');
+      } finally {
+        btnSend.disabled = false;
+        setStatus('Ready.');
+      }
+    }
+
+    // --- Remember helper (/remember) ---
+    async function doRemember(text){
+      const t = (text || '').trim();
+      if (!t) return;
+      const body = { text: t, user: settings.user, session: settings.session };
+      const r = await fetch('/remember', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      if (!r.ok){
+        showToast('Remember failed');
+        return;
+      }
+      showToast('✓ Remembered');
+    }
+
+    // --- Controls ---
+    btnSend.addEventListener('click', ()=>{
+      const t = composer.value;
+      composer.value = '';
+      sendMessage(t);
+    });
+
+    composer.addEventListener('keydown', (e)=>{
+      if (e.key === 'Enter' && !e.shiftKey){
+        e.preventDefault();
+        const t = composer.value;
+        composer.value = '';
+        sendMessage(t);
+      }
+    });
+
+    btnNew.addEventListener('click', ()=>{
+      if (!confirm('Clear this chat view? (Server session history may still persist depending on config)')) return;
+      list.innerHTML = '';
+      setStatus('Ready.');
+    });
+
+    btnRemember.addEventListener('click', ()=>{
+      rememberInput.focus();
+    });
+
+    btnDoRemember.addEventListener('click', ()=>{
+      const t = rememberInput.value;
+      rememberInput.value = '';
+      doRemember(t);
+    });
+
+    rememberInput.addEventListener('keydown', (e)=>{
+      if (e.key === 'Enter'){
+        e.preventDefault();
+        const t = rememberInput.value;
+        rememberInput.value = '';
+        doRemember(t);
+      }
+    });
+
+    // --- Optional: small /debug/context poll to keep chips & status fresh ---
+    async function pollDebug(){
+      try{
+        const url = '/debug/context?' + new URLSearchParams({ user: settings.user, session: settings.session });
+        const r = await fetch(url);
+        if (r.ok){
+          const js = await r.json();
+          chipProfile.textContent = `profile=${js.active_profile || settings.profile}`;
+        }
+      }catch(_){}
+      setTimeout(pollDebug, settings.pollMs);
+    }
+
+    // --- Init ---
+    (function init(){
+      setStatus('Ready.');
+      pollDebug();
+      // welcome hint (not persisted)
+      renderMsg('assistant', 'Hi! This is a lightweight chat window. I’ll remember important facts via RAG while this page is open. Ask me anything.');
+    })();
+  </script>
+</body>
+</html>
