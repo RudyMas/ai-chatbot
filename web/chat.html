@@ -7,7 +7,7 @@
   <style>
     :root{
       --bg:#0b0d10; --panel:#101419; --muted:#9bb2ca; --text:#e6eef8; --accent:#6aa9ff; --border:#1a2230;
-      --user:#0f1724; --assistant:#0f1520; --chip:#0d1117;
+      --user:#0f1724; --assistant:#0f1520; --chip:#0d1117; --picker:#0c1117; --pickerBorder:#16212e;
     }
     *{ box-sizing: border-box; }
     html,body{ height:100%; }
@@ -42,9 +42,9 @@
     .text{ white-space:pre-wrap; line-height:1.55; font-size:16px; }
     .footer{
       background:var(--panel); border-top:1px solid var(--border);
-      padding:10px 14px;
+      padding:10px 14px; position:relative;
     }
-    .inputWrap{ max-width:920px; margin:0 auto; display:grid; gap:10px; }
+    .inputWrap{ max-width:920px; margin:0 auto; display:grid; gap:10px; position:relative; }
     textarea{
       width:100%; min-height:80px; max-height:50vh; padding:12px 14px; resize:vertical;
       border-radius:12px; background:#0d1117; color:var(--text); border:1px solid var(--border); line-height:1.5; font-size:15px;
@@ -60,6 +60,35 @@
     a{ color:var(--accent); text-decoration:none; }
     .smallInputs input{
       background:#0d1117; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:6px 8px;
+    }
+
+    /* Emoji picker */
+    .emojiWrap{
+      position:absolute; bottom:118px; right:0; z-index:20;
+      background:var(--picker); border:1px solid var(--pickerBorder); border-radius:12px;
+      width:360px; box-shadow:0 8px 24px rgba(0,0,0,.35); display:none;
+    }
+    .emojiHead{
+      display:flex; gap:6px; padding:8px; border-bottom:1px solid var(--pickerBorder); flex-wrap:wrap;
+    }
+    .emojiHead .tab{
+      background:#0d141e; border:1px solid var(--pickerBorder); color:var(--muted);
+      padding:6px 10px; border-radius:8px; font-size:12.5px; cursor:pointer;
+    }
+    .emojiHead .tab.active{ border-color:#2a3b50; color:#cfe1ff; }
+    .emojiGrid{
+      padding:10px; display:grid; grid-template-columns:repeat(8, 1fr); gap:6px; max-height:260px; overflow:auto;
+    }
+    .emojiBtn{
+      font-size:20px; background:#0e1420; border:1px solid var(--pickerBorder); border-radius:8px;
+      padding:6px; cursor:pointer; display:grid; place-items:center;
+    }
+    .emojiFoot{
+      display:flex; justify-content:space-between; align-items:center; gap:8px;
+      padding:8px; border-top:1px solid var(--pickerBorder);
+    }
+    .emojiFoot input{
+      flex:1; background:#0d1117; color:var(--text); border:1px solid var(--pickerBorder); border-radius:8px; padding:6px 8px;
     }
   </style>
 </head>
@@ -86,7 +115,10 @@
     <div class="inputWrap">
       <textarea id="composer" placeholder="Message the assistant…"></textarea>
       <div class="row">
-        <button id="btnSend" class="btn">Send</button>
+        <div class="row">
+          <button id="btnEmoji" class="btn">😊 Emoji</button>
+          <button id="btnSend" class="btn">Send</button>
+        </div>
         <div id="status" class="muted">Ready.</div>
         <span class="spacer"></span>
         <div class="row smallInputs">
@@ -94,6 +126,16 @@
             <input id="rememberInput" type="text" placeholder="Fact to store (supports #tags)" size="32"/>
           </label>
           <button id="btnDoRemember" class="btn">Save</button>
+        </div>
+      </div>
+
+      <!-- Emoji Picker -->
+      <div id="emojiWrap" class="emojiWrap" aria-hidden="true">
+        <div id="emojiHead" class="emojiHead"></div>
+        <div id="emojiGrid" class="emojiGrid"></div>
+        <div class="emojiFoot">
+          <input id="emojiSearch" type="text" placeholder="Search…"/>
+          <button id="emojiClose" class="btn">Close</button>
         </div>
       </div>
     </div>
@@ -129,6 +171,13 @@
     const btnDoRemember = document.getElementById('btnDoRemember');
     const statusEl = document.getElementById('status');
     const toast = document.getElementById('toast');
+
+    const btnEmoji = document.getElementById('btnEmoji');
+    const emojiWrap = document.getElementById('emojiWrap');
+    const emojiHead = document.getElementById('emojiHead');
+    const emojiGrid = document.getElementById('emojiGrid');
+    const emojiSearch = document.getElementById('emojiSearch');
+    const emojiClose = document.getElementById('emojiClose');
 
     // Assistant identity (updated from /debug/context)
     let assistantName = "Assistant";   // fallback
@@ -273,9 +322,157 @@
         if (r.ok){
           const js = await r.json();
           chipProfile.textContent = `profile=${js.active_profile || settings.profile}`;
+          if (js.identity_name){
+            assistantName = js.identity_name;
+            assistantInitial = firstInitial(assistantName);
+          }
+        }
+      }catch(_){}
+      setTimeout(pollDebug, settings.pollMs);
+    }
 
-          console.log(js);
+    // ===== Emoji Picker =====
+    const EMOJI_CATS = [
+      ["Faces","😀 😃 😄 😁 😆 😅 😂 🙂 😉 😊 😇 🙃 😍 😘 😗 😙 😚 😋 😛 😝 🤪 🤗 🤔 🤨 😐 😑 😶 🙄 😏 😴 🤤 🤯 😬 🥳 🤓 🥸 😎 🫠 🥹 😢 😭 😤 😡 😠 😳 🤧 🤒 🤕 🥴 🤮 🤢 🥱 🤫 🤭 😮‍💨 😮 😱 😲 😨 😰 😥 😔 😕 😟 😣 😖 😞 😓 😩 😫"].join(" "),
+      ["Gestures","👍 👎 👊 ✊ 🤛 🤜 👏 🙌 🫶 💪 🫵 👌 ✌️ 🤞 🤟 🤘 🖖 🤙 🫱 🫲 🫸 🫷 👋 🤚 ✋ 🖐 🖕 ☝️ 👉 👈 👆 👇 🤏 ✍️ 🤌 🙏"].join(" "),
+      ["Hearts","❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💖 💗 💓 💞 💘 💝 💟 💔 ❣️ 💌"].join(" "),
+      ["Objects","💡 🔥 🌟 ⭐ ✨ ⚡ 💥 🎉 🎊 🎯 📌 📎 🔗 🧲 🧰 🛠️ 🧪 🧬 ⚙️ 🧠 🖥️ 💻 ⌨️ 🖱️ 🖨️ 📱 📲 🎧 🎤 🎹 🎸 🎻 🥁 📷 🎥 📺"].join(" "),
+      ["Symbols","✅ ✔️ ❌ ⛔ ⚠️ 🚫 ❗ ❕ ❓ ⁉️ 🔔 💤 🆕 🆒 🆗 🔝 🔜 ➕ ➖ ➡️ ⬅️ ⬆️ ⬇️ 🔄 ♻️"].join(" "),
+      ["Animals","🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐷 🐮 🐵 🐔 🐧 🐦 🦆 🐸 🐢 🐍 🦄 🐝 🐞"].join(" "),
+      ["Food","🍎 🍊 🍋 🍌 🍉 🍇 🍓 🫐 🍒 🍑 🥭 🍍 🥥 🥝 🥑 🍅 🥕 🥔 🌽 🥐 🥖 🧀 🍕 🍔 🍟 🌮 🌯 🥗 🍣 🍪 🍰 🍩 🍫 ☕ 🍵 🥤 🧋"].join(" "),
+    ];
 
+    let activeCat = 0;
+    let emojiAll = [];   // flattened list for search
+
+    function buildEmojiData(){
+      emojiAll = [];
+      EMOJI_CATS.forEach(cat => {
+        const [name, listStr] = [cat.split(",")[0], cat.substring(cat.indexOf(" ")+1)];
+        const emojis = listStr.split(/\s+/).filter(Boolean);
+        emojiAll.push(...emojis);
+      });
+    }
+
+    function renderEmojiTabs(){
+      emojiHead.innerHTML = "";
+      EMOJI_CATS.forEach((cat, i) => {
+        const name = cat.split(" ")[0]; // category name (approx)
+        const tab = document.createElement("button");
+        tab.className = "tab" + (i===activeCat ? " active" : "");
+        tab.textContent = name;
+        tab.addEventListener("click", () => {
+          activeCat = i;
+          renderEmojiGrid();
+          renderEmojiTabs();
+          emojiSearch.value = "";
+        });
+        emojiHead.appendChild(tab);
+      });
+    }
+
+    function getCatEmojis(idx){
+      const cat = EMOJI_CATS[idx] || EMOJI_CATS[0];
+      const listStr = cat.substring(cat.indexOf(" ")+1);
+      return listStr.split(/\s+/).filter(Boolean);
+    }
+
+    function renderEmojiGrid(filteredList){
+      const items = filteredList || getCatEmojis(activeCat);
+      emojiGrid.innerHTML = "";
+      items.forEach(e => {
+        const b = document.createElement("button");
+        b.className = "emojiBtn";
+        b.type = "button";
+        b.textContent = e;
+        b.addEventListener("click", () => {
+          insertAtCursor(composer, e + " ");
+          composer.focus();
+        });
+        emojiGrid.appendChild(b);
+      });
+    }
+
+    function openEmojiPicker(){
+      // position is fixed in CSS; just show it
+      emojiWrap.style.display = "block";
+      emojiWrap.setAttribute("aria-hidden", "false");
+      // remember cursor so inserts go to the right spot
+      saveSelection(composer);
+      emojiSearch.value = "";
+      renderEmojiTabs();
+      renderEmojiGrid();
+      emojiSearch.focus();
+      document.addEventListener("mousedown", outsideEmojiClose, true);
+      document.addEventListener("keydown", escEmojiClose, true);
+    }
+
+    function closeEmojiPicker(){
+      emojiWrap.style.display = "none";
+      emojiWrap.setAttribute("aria-hidden", "true");
+      document.removeEventListener("mousedown", outsideEmojiClose, true);
+      document.removeEventListener("keydown", escEmojiClose, true);
+    }
+
+    function outsideEmojiClose(e){
+      if (!emojiWrap.contains(e.target) && e.target !== btnEmoji){
+        closeEmojiPicker();
+      }
+    }
+    function escEmojiClose(e){
+      if (e.key === "Escape") closeEmojiPicker();
+    }
+
+    btnEmoji.addEventListener("click", () => {
+      if (emojiWrap.style.display === "block") closeEmojiPicker();
+      else openEmojiPicker();
+    });
+    emojiClose.addEventListener("click", closeEmojiPicker);
+
+    emojiSearch.addEventListener("input", () => {
+      const q = emojiSearch.value.trim();
+      if (!q){
+        renderEmojiGrid();
+        return;
+      }
+      // naive search: filter by unicode name is not available; fallback to showing all containing chars
+      // practical approach: match on the emoji itself if user pasted an emoji into search
+      const results = emojiAll.filter(e => e.includes(q));
+      renderEmojiGrid(results.length ? results : emojiAll);
+    });
+
+    // Insert-at-cursor helpers
+    function insertAtCursor(el, text){
+      const start = el.selectionStart ?? el.value.length;
+      const end   = el.selectionEnd ?? el.value.length;
+      const before = el.value.slice(0, start);
+      const after  = el.value.slice(end);
+      el.value = before + text + after;
+      const pos = start + text.length;
+      el.selectionStart = el.selectionEnd = pos;
+      // keep scroll if textarea grew
+      el.scrollTop = el.scrollHeight;
+    }
+
+    let savedSel = null;
+    function saveSelection(el){
+      savedSel = { start: el.selectionStart || 0, end: el.selectionEnd || 0 };
+    }
+    composer.addEventListener("keyup", () => saveSelection(composer));
+    composer.addEventListener("mouseup", () => saveSelection(composer));
+    composer.addEventListener("focus", () => saveSelection(composer));
+
+    // --- Init emoji dataset
+    buildEmojiData();
+
+    // --- Init: poll /debug/context to update chips & assistant identity ---
+    async function pollDebug(){
+      try{
+        const url = '/debug/context?' + new URLSearchParams({ user: settings.user, session: settings.session });
+        const r = await fetch(url);
+        if (r.ok){
+          const js = await r.json();
+          chipProfile.textContent = `profile=${js.active_profile || settings.profile}`;
           if (js.identity_name){
             assistantName = js.identity_name;
             assistantInitial = firstInitial(assistantName);
@@ -289,7 +486,7 @@
     (function init(){
       setStatus('Ready.');
       pollDebug();
-      // Initial welcome (uses current fallback name; subsequent messages will use updated name once /debug/context returns)
+      // Initial welcome (uses fallback name; updates on next messages after profile resolves)
       renderMsg('assistant', "Hi! This is a lightweight chat window. I’ll remember important facts via RAG while this page is open. Ask me anything.");
     })();
   </script>
