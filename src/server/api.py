@@ -488,7 +488,7 @@ async def transcribe(file: UploadFile = File(...)):
 
 # ---------- New: Debug ----------
 @app.get("/debug/context")
-def debug_context(session: Optional[str] = None, user: Optional[str] = None):
+def debug_context(session: Optional[str] = None, user: Optional[str] = None, rag_last: int = 20):
     """
     Show exactly what the server sees for this user/session:
     - Current profile
@@ -497,28 +497,34 @@ def debug_context(session: Optional[str] = None, user: Optional[str] = None):
     - Short-term buffer (turns in memory)
     - Last injected RAG notes
     - Identity language from YAML config
+    - Identity name from YAML config
     """
     sess = (session or "api").strip()
     user_name = (user or raw_cfg.get("user", {}).get("name") or "User").strip()
 
     buf = _get_session_buffer(sess)
 
-    # Get language from config
-    identity_language = raw_cfg.get("chatbot", {}).get("identity", {}).get("language", "en-US")
+    identity_name = getattr(getattr(app_cfg, "chatbot", None), "name", None) \
+                    or raw_cfg.get("chatbot", {}).get("name", "Assistant")
+
+    identity_language = getattr(getattr(getattr(app_cfg, "chatbot", None), "identity", None), "language", None) \
+                        or raw_cfg.get("chatbot", {}).get("identity", {}).get("language", "en-US")
 
     # Read store entries for this user
     rag_entries = []
-    try:
-        with open(STORE.path, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    entry = json.loads(line)
-                except Exception:
-                    continue
-                if entry.get("user_name") == user_name:
-                    rag_entries.append(entry)
-    except FileNotFoundError:
-        pass
+    if rag_last > 0:
+        try:
+            with open(STORE.path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+                    except Exception:
+                        continue
+                    if entry.get("user_name") == user_name:
+                        rag_entries.append(entry)
+        except FileNotFoundError:
+            pass
+        rag_entries = rag_entries[-rag_last:]
 
     return {
         "active_profile": state.active_profile,
@@ -531,7 +537,9 @@ def debug_context(session: Optional[str] = None, user: Optional[str] = None):
         "pending_count": buf.count,
         "last_injected_notes": getattr(buf, "last_injected_notes", []),
         "rag_entries_for_user": rag_entries[-5:],  # last 5 for this user
-        "identity_language": identity_language
+        "identity_language": identity_language,
+        "identity_name": identity_name,
+        "system_template_path": str(TEMPLATE_PATH),
     }
 
 
