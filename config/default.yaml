@@ -4,6 +4,7 @@ chatbot:
     gender: "male"
     age: 43
     language: "en-US"
+    timezone: "Europe/Brussels"
   personality:
     style: "intelligent, witty, helpful"
     boundaries: "SFW, respectful"

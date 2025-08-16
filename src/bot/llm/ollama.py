@@ -2,10 +2,59 @@ from __future__ import annotations
 import requests
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
+from datetime import datetime
+
+# Prefer stdlib zoneinfo if available (Py3.9+); otherwise fall back to naive time
+try:
+    from zoneinfo import ZoneInfo  # type: ignore
+except Exception:  # pragma: no cover
+    ZoneInfo = None  # type: ignore
+
 from bot.config import AppConfig
 
+
+def _read_text(path: str | Path) -> str:
+    return Path(path).read_text(encoding="utf-8")
+
+
+def _resolve_timezone(cfg: AppConfig) -> str:
+    """
+    Read timezone from config at chatbot.identity.timezone.
+    Falls back to 'Europe/Brussels' if not set.
+    """
+    try:
+        tz = getattr(getattr(cfg.chatbot, "identity", None), "timezone", None)
+        if tz:
+            return str(tz)
+    except Exception:
+        pass
+    return "Europe/Brussels"
+
+
+def _now_string(tz_name: str) -> str:
+    """
+    Return a human-friendly "YYYY-MM-DD HH:MM (TZNAME)" timestamp.
+    Uses zoneinfo if available; otherwise uses local naive time.
+    """
+    if ZoneInfo is not None:
+        try:
+            tz = ZoneInfo(tz_name)
+            now = datetime.now(tz)
+            return f"{now:%Y-%m-%d %H:%M} ({tz_name})"
+        except Exception:
+            pass  # fall through to naive
+    now = datetime.now()
+    return f"{now:%Y-%m-%d %H:%M} ({tz_name})"
+
+
 def render_system_prompt(cfg: AppConfig, template_path: str) -> str:
-    t = Path(template_path).read_text(encoding="utf-8")
+    """
+    Render your system template placeholders, then prefix a visible temporal header
+    so the model reliably sees & uses the current time.
+    Placeholders supported (as before):
+      {{name}}, {{gender}}, {{age}}, {{language}}, {{style}}, {{boundaries}}, {{user_name}}
+    """
+    base = _read_text(template_path)
     ctx = {
         "name": cfg.chatbot.identity.name,
         "gender": cfg.chatbot.identity.gender,
@@ -16,11 +65,24 @@ def render_system_prompt(cfg: AppConfig, template_path: str) -> str:
         "user_name": cfg.user.name,
     }
     for k, v in ctx.items():
-        t = t.replace(f"{{{{{k}}}}}", v)
-    return t
+        base = base.replace(f"{{{{{k}}}}}", v)
+
+    # Strong, top-of-prompt temporal header (models notice this better than an appendix)
+    tz_name = _resolve_timezone(cfg)
+    now_str = _now_string(tz_name)
+    time_header = (
+        "### Temporal context\n"
+        f"Current date/time: {now_str}\n"
+        "- Treat this as 'now' for any references to today/this week/etc.\n"
+        "- If asked for the current time or date, use this value.\n"
+        "- Do not say you cannot access the current time.\n\n"
+    )
+
+    return time_header + base.strip()
+
 
 def _options(cfg: AppConfig) -> Dict[str, Any]:
-    opts = {
+    opts: Dict[str, Any] = {
         "temperature": cfg.llm.temperature,
         "num_predict": cfg.llm.max_tokens,
     }
@@ -33,6 +95,7 @@ def _options(cfg: AppConfig) -> Dict[str, Any]:
         except Exception:
             pass
     return opts
+
 
 def generate(prompt: str, cfg: AppConfig, system_template_path: str) -> str:
     """Single-turn call (no history) via /api/generate."""
@@ -54,6 +117,7 @@ def generate(prompt: str, cfg: AppConfig, system_template_path: str) -> str:
         raise RuntimeError(f"Ollama error {r.status_code}: {err}")
     data = r.json()
     return (data.get("response") or "").strip()
+
 
 def generate_chat(history: List[Tuple[str, str]], user_message: str, cfg: AppConfig, system_template_path: str) -> str:
     """
