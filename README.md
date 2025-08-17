@@ -176,37 +176,45 @@ You can create different system prompts for different profiles by creating a new
 
 Open in your browser:
 
-- **Main control panel:**  
+### **Main control panel:**  
   [http://127.0.0.1:8000/static/index.html](http://127.0.0.1:8000/static/index.html)
 
 Recommended on starting this page first to set up your profile and TTS/STT settings and from there you can access the other UIs.
 This way you are sure the right profile is selected and the TTS/STT settings are configured.
 
-- **Voice Viewer (hands-free):**  
+- Controls in `index.html`
+  - 🗔 Open **Voice Viewer**
+  - 💬 Open **Chat**
+  - 💡 Demo: Let Jarvis Speak
+  - 🔊 Speak last reply
+  - 🎤 Start/Stop recording
+  - 🪲 Debug
+  - 🪲 Open Debug JSON
+  - ⬇️ Export memory
+  - ⬆️ Import memory
+
+### **Voice Viewer (hands-free):**  
   [http://127.0.0.1:8000/static/viewer.html](http://127.0.0.1:8000/static/viewer.html)
 
 To make sure the UI works correctly, you may need to allow microphone access in your browser settings.
 
-- **Chat UI (text only):**  
+⚠️ **Mute Listening Mode**  
+In the **Voice Viewer (viewer.html)**, you’ll find a checkbox labeled **Mute AI (store only)**.  
+
+When enabled:
+- The AI will **continue listening** in the background.
+- Spoken input is **not responded to immediately**, but instead **stored in the memory buffer**.
+- Once mute is disabled, the AI can use everything it “heard” during mute mode as context when responding.
+- If you press **Demo Speak**, the AI will immediately respond to what was said during mute mode, and then continue  
+  listening silently with mute still active.
+
+This allows the AI to **listen in silently** on conversations, gathering context without interrupting — useful when  
+you want it to be aware but not actively speaking.
+
+### **Chat UI (text only):**  
   [http://127.0.0.1:8000/static/chat.html](http://127.0.0.1:8000/static/chat.html)
 
-### Controls in `index.html`
-
-- 🎤 Start/Stop recording
-- 🔊 Replay last reply
-- 🪲 Debug / view context
-- ⬇️ Export memory
-- ⬆️ Import memory
-- 🗔 Open **Voice Viewer**
-- 💬 Open **Chat UI**
-
----
-
-## 📁 Memory Management
-
-- **Export** — Downloads a `.jsonl` file of Jarvis’s memory.
-- **Import** — Uploads a `.jsonl` file to restore memory.
-- **Debug** — Inspect active profile, conversation turns, and facts.
+This is a simple chat interface similar to ChatGPT, where you can type messages and receive text responses from Jarvis.
 
 ---
 

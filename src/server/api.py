@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse
 from bot.llm.ollama import get_last_ollama_payload
+from bot.llm.ollama import generate  # single-shot generator
 
 from bot.config import load_config, get_system_template_path, UserConfig
 from bot.llm.ollama import generate_chat
@@ -73,6 +74,11 @@ class ChatIn(BaseModel):
     message: str
     user: Optional[str] = None
     session: Optional[str] = None
+    # NEW: when true, store user text in short-term buffer (and RAG)
+    # without calling the LLM or speaking back
+    listen_only: Optional[bool] = None
+    # Optional tags for RAG fact when listen_only is used
+    remember_tags: Optional[List[str]] = None
 
 
 class ChatOut(BaseModel):
@@ -117,6 +123,12 @@ class MemoryCleanIn(BaseModel):
     user: Optional[str] = None
     # If provided, keep only the most recent N items for this user (after dedup)
     keep_latest: Optional[int] = None
+
+
+class DemoIn(BaseModel):
+    user: Optional[str] = None
+    session: Optional[str] = None
+    demo_mode: Optional[bool] = None
 
 
 # ---------- Helpers ----------
@@ -295,6 +307,45 @@ def chat(inp: ChatIn):
             text = f"✓ Flushed {flushed} turns to RAG and cleared buffer."
         return ChatOut(answer=text, model=app_cfg.llm.model, tts_enabled=state.tts_enabled,
                        stt_enabled=state.stt_enabled, profile=state.active_profile)
+
+    # --- Listen-only mode: store to buffer (+optional RAG) without LLM ---
+    if inp.listen_only:
+        logger = _build_logger(sess, user_name)
+        logger.log("user", inp.message, user_name=user_name)
+
+        # Append to the session buffer (short-term memory)
+        buf = _get_session_buffer(sess)
+        user_line = f"{user_name}: {inp.message}"
+        buf.turns.append(("user", user_line))
+        buf.count += 1
+
+        # Optionally store to RAG as a fact (mirror previous /remember behavior)
+        if rag_cfg.get("enabled", True):
+            try:
+                tags = list(dict.fromkeys((inp.remember_tags or []) + ["voice", "viewer"]))
+                entry = RAGStore.make_fact_entry(sess, user_name, inp.message, tags)
+                STORE.append(entry)
+            except Exception:
+                pass  # non-fatal
+
+            # Keep periodic auto-summary behavior
+            chunk_messages = int(rag_cfg.get("chunk_messages", 6))
+            max_words = int(rag_cfg.get("summary_max_words", 120))
+            tags_sum = list(rag_cfg.get("tags", ["session-summary"]))
+            if chunk_messages > 0 and (buf.count % chunk_messages == 0):
+                recent = buf.turns[-chunk_messages:]
+                note = summarize_chunk(app_cfg, str(TEMPLATE_PATH), recent, max_words)
+                entry = RAGStore.make_summary_entry(sess, user_name, note, tags_sum)
+                STORE.append(entry)
+
+        # Return a neutral response; UI won’t TTS this
+        return ChatOut(
+            answer="(muted) stored.",
+            model=app_cfg.llm.model,
+            tts_enabled=state.tts_enabled,
+            stt_enabled=state.stt_enabled,
+            profile=state.active_profile
+        )
 
     # Normal chat flow
     notes: List[str] = []
@@ -486,6 +537,89 @@ async def transcribe(file: UploadFile = File(...)):
             os.remove(tmp_path)
         except Exception:
             pass
+
+
+@app.post("/demo/set")
+def demo_set(inp: DemoIn):
+    """
+    Toggle demo_mode server-side (optional convenience).
+    """
+    if inp.demo_mode is not None:
+        state.demo_mode = bool(inp.demo_mode)
+    return {"ok": True, "demo_mode": getattr(state, "demo_mode", False)}
+
+
+@app.post("/demo/speak")
+def demo_speak(inp: DemoIn):
+    """
+    Generate a short, witty, 1–2 sentence remark based on recent context
+    (short-term buffer) — perfect for a mic-drop at the end of a talk.
+    """
+    user_name = (inp.user or raw_cfg.get("user", {}).get("name") or "User").strip()
+    sess = (inp.session or "api").strip()
+
+    # pull recent turns from the in-memory session buffer
+    buf = _get_session_buffer(sess)
+    recent = buf.turns[-history_max_messages:] if history_max_messages > 0 else buf.turns[:]
+
+    # Build a compact transcript block (keep it lean)
+    lines = []
+    for role, text in recent[-18:]:  # last ~18 lines max
+        # strip any 'Relevant notes:' lines and keep pure dialogue
+        if role == "assistant":
+            lines.append(f"Assistant: {text.strip()}")
+        else:
+            # history stores e.g. "Rudy: hi", keep as-is
+            lines.append(text.strip())
+
+    transcript = "\n".join(lines).strip()
+    print(f"Transcript for demo remark:\n{transcript}\n")
+
+    # show transcript
+    if not transcript:
+        raise HTTPException(status_code=400, detail="No recent conversation history to base remark on.")
+    if len(transcript) > 2000:
+        # truncate to avoid too long prompts
+        transcript = transcript[:2000] + " … (truncated)"
+    if not transcript.endswith("."):
+        transcript += "."
+    # Ensure we have a newline at the end for better formatting
+    if not transcript.endswith("\n"):
+        transcript += "\n"
+    # If the transcript is too short, we can't generate a meaningful remark
+    if len(transcript) < 20:
+        raise HTTPException(status_code=400, detail="Transcript too short for a meaningful remark.")
+    # Ensure we have a newline at the end for better formatting
+
+    # show the transcript on screen
+    print(f"Transcript for demo remark:\n{transcript}\n")
+
+    # Compose a targeted single-turn prompt
+    prompt = (
+        "You are about to make a single short remark for the audience.\n"
+        "Constraints:\n"
+        "- 1–2 sentences max\n"
+        "- Polished, lightly witty\n"
+        "- React to themes in the transcript; do NOT quote it verbatim\n"
+        "- No meta talk about being an AI or time access\n"
+        "- Be helpful and relevant; include a subtle callback if natural\n\n"
+        f"Transcript (recent):\n{transcript}\n\n"
+        "Your remark:"
+    )
+
+    try:
+        # single-turn call (no history): we still use the same system prompt/persona
+        answer = generate(prompt, app_cfg, str(TEMPLATE_PATH))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Demo speak error: {e}")
+
+    # Log like a normal assistant turn so UI panels show it
+    logger = _build_logger(sess, user_name)
+    logger.log("assistant", answer)
+    buf.turns.append(("assistant", answer))
+    buf.count += 1
+
+    return {"ok": True, "answer": answer, "profile": state.active_profile}
 
 
 # ---------- New: Debug ----------

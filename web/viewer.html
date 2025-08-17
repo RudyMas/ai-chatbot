@@ -172,6 +172,7 @@
     <div class="footer">
         <div class="controls">
             <button id="btnStart" class="btn">▶️ Start Listening</button>
+            <button id="btnDemoSpeak" class="btn">💡 Demo Speak</button>
             <label><input type="checkbox" id="chkMute"> Mute AI (store only)</label>
             <label><input type="checkbox" id="chkStop"> Stop Listening</label>
             <span><span class="dot off" id="dotListen"></span>Listening</span>
@@ -211,6 +212,7 @@
     const aiText = document.getElementById('aiText');
     const userText = document.getElementById('userText');
     const btnStart = document.getElementById('btnStart');
+    const btnDemoSpeak = document.getElementById('btnDemoSpeak');
     const chkMute = document.getElementById('chkMute');
     const chkStop = document.getElementById('chkStop');
     const dotListen = document.getElementById('dotListen');
@@ -300,7 +302,7 @@
     let ttsActive = false;      // true while we’re preparing/playing TTS
     let restartTimer = null;    // single pending restart timer
     const RESTART_BACKOFF_MAX = 4000;
-    const WATCHDOG_IDLE_MS = 60000; // restart if no SR activity for this long (when not speaking)
+    const WATCHDOG_IDLE_MS = 36000000; // restart if no SR activity for this long (when not speaking)
 
     function bumpActivity() {
         lastRecogEventAt = Date.now();
@@ -473,15 +475,21 @@
         const clipped = text.length > settings.maxChars ? (text.slice(0, settings.maxChars) + '…') : text;
 
         if (chkMute.checked) {
-            // Store only
-            const body = {text: clipped + " #voice #viewer", user: settings.user, session: settings.session};
-            const r = await fetch('/remember', {
+            // Store in short-term buffer AND RAG (server-side), no LLM reply
+            const body = {
+                message: clipped,
+                user: settings.user,
+                session: settings.session,
+                listen_only: true,
+                remember_tags: ["voice", "viewer"]
+            };
+            const r = await fetch('/chat', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(body)
             });
             if (!r.ok) {
-                console.warn('remember fail', await r.text());
+                console.warn('listen_only fail', await r.text());
             }
             return;
         }
@@ -604,6 +612,34 @@
             stopRecog(true);
             stopListeningTimers();
             btnStart.textContent = '▶️ Start Listening';
+        }
+    });
+
+    btnDemoSpeak.addEventListener('click', async () => {
+        try {
+            // Pause listening while we trigger the remark
+            stopRecog(false);
+
+            const r = await fetch('/demo/speak', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({user: settings.user, session: settings.session})
+            });
+            if (!r.ok) {
+                showToast('Demo speak error: ' + await r.text());
+                return;
+            }
+            const js = await r.json();
+            // Show it in the UI
+            aiText.textContent = js.answer || '';
+            // Speak it if TTS enabled
+            if (settings.tts && js.answer) {
+                await speak(js.answer);
+            }
+        } catch (e) {
+            console.warn('demo speak failed', e);
+        } finally {
+            if (!chkStop.checked) tryStartRecog(); // resume listening
         }
     });
 

@@ -85,6 +85,10 @@
 <div class="row">
     <button id="btnOpenViewer">🗔 Open Voice Viewer</button>
     <button id="btnOpenChat">💬 Open Chat</button>
+    <button id="btnDemoSpeak">💡 Demo: Let Jarvis Speak</button>
+</div>
+
+<div class="row">
     <button id="btnSpeak">🔊 Speak last reply</button>
     <button id="btnRecord">🎤 Start Recording</button>
     <button id="btnDebug">🪲 Debug</button>
@@ -666,6 +670,37 @@
         appendLog(`🧹 Cleaned memory: removed ${js.removed}, remaining ${js.remaining}`);
         memQuery.offset = 0;
         await loadMemoryList(false);
+    };
+
+    document.getElementById('btnDemoSpeak').onclick = async () => {
+        const user = document.getElementById('user').value || 'User';
+        const session = document.getElementById('session').value || 'api';
+
+        const r = await fetch('/demo/speak', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({user, session})
+        });
+        if (!r.ok) {
+            appendLog('Demo speak error: ' + await r.text());
+            return;
+        }
+        const js = await r.json();
+        appendLog(`Assistant (${js.profile}): ` + js.answer);
+
+        // Optional: speak it using your existing /speak endpoint
+        try {
+            const resp = await fetch('/speak?' + new URLSearchParams({text: js.answer}), {method: 'POST'});
+            if (resp.ok) {
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.getElementById('player');
+                a.src = url;
+                a.style.display = 'block';
+                a.play();
+            }
+        } catch (e) {
+        }
     };
 
     // init
