@@ -50,6 +50,7 @@ retriever:
 chat:
   use_chat_api: true
   history_max_messages: 12
+  demo_mode: false
 
 # NEW: Audio + Debug
 audio:
@@ -63,7 +64,7 @@ audio:
     enabled: false
     engine: "faster-whisper"
     model_size: "base"             # tiny/base/small/medium/large-v3
-    device: "cpu"                  # "cpu" or "cuda" for GPU
+    device: "cuda"                 # "cpu" or "cuda" for GPU
 
 debug:
   enable_debug_endpoints: true

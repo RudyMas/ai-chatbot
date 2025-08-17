@@ -305,6 +305,9 @@
     let lastErrorAt = 0;        // throttle visible error toasts/logs
     let micKeepalive = null;
     let ttsActive = false;      // true while we’re preparing/playing TTS
+    // --- TTS Queue ---
+    const ttsQueue = [];
+    let ttsProcessing = false
     let restartTimer = null;    // single pending restart timer
     let keepListeningInBackground = false;
     const RESTART_BACKOFF_MAX = 4000;
@@ -444,39 +447,90 @@
     }
 
     async function speak(text) {
-        try {
-            ttsActive = true;
-            setSpeak(true);
-            stopRecog(false); // pause listening during TTS
-            setListen(false);          // <— force dot off during TTS
+         queueSpeak(text);
+    }
 
+    function queueSpeak(text) {
+        if (!settings.tts || !text) {
+            lastSpokeAt = Date.now();
+            return;
+        }
+        ttsQueue.push(text);
+        if (!ttsProcessing) processTTSQueue();
+    }
+
+    async function processTTSQueue() {
+        if (ttsProcessing) return;
+        ttsProcessing = true;
+        ttsActive = true;
+        setSpeak(true);
+
+        // Pause listening once for the whole batch
+        stopRecog(false);
+        setListen(false);
+
+        try {
+            while (ttsQueue.length) {
+                const next = ttsQueue.shift();
+                await speakOnce(next);  // fetch, play, await end
+            }
+        } finally {
+            setSpeak(false);
+            ttsActive = false;
+            ttsProcessing = false;
+            lastSpokeAt = Date.now();
+            if (!chkStop.checked) tryStartRecog(); // resume after the whole queue
+        }
+    }
+
+    async function speakOnce(text) {
+        try {
             const resp = await fetch('/speak?' + new URLSearchParams({text}), {method: 'POST'});
             if (!resp.ok) {
                 showToast('TTS error');
-                setSpeak(false);
                 return;
             }
             const blob = await resp.blob();
             const url = URL.createObjectURL(blob);
             player.src = url;
-            await player.play().catch(() => {
+
+            try {
+                await player.play();
+            } catch (_) {
+            }
+
+            await new Promise((resolve) => {
+                const cleanup = () => {
+                    player.removeEventListener('ended', onEnd);
+                    player.removeEventListener('error', onErr);
+                    URL.revokeObjectURL(url);
+                    resolve();
+                };
+                const onEnd = () => cleanup();
+                const onErr = () => cleanup();
+                player.addEventListener('ended', onEnd, {once: true});
+                player.addEventListener('error', onErr, {once: true});
             });
         } catch (e) {
-            console.warn('speak error', e);
-            ttsActive = false;
+            console.warn('speakOnce error', e);
         }
     }
 
     player.addEventListener('ended', () => {
-        setSpeak(false);
-        ttsActive = false;
-        lastSpokeAt = Date.now();
-        if (!chkStop.checked) tryStartRecog(); // resume listening
+        // Only flip indicators & resume if we're NOT processing a queued batch
+        if (!ttsProcessing) {
+            setSpeak(false);
+            ttsActive = false;
+            lastSpokeAt = Date.now();
+            if (!chkStop.checked) tryStartRecog();
+        }
     });
 
     player.addEventListener('error', () => {
-        setSpeak(false);
-        ttsActive = false;           // <— add
+        if (!ttsProcessing) {
+            setSpeak(false);
+            ttsActive = false;
+        }
     });
 
     // --- Chat / Remember flow ---
@@ -517,7 +571,7 @@
         }
         const js = await r.json();
         if (settings.tts) {
-            await speak(js.answer || '');
+            queueSpeak(js.answer || '');
         } else {
             lastSpokeAt = Date.now();
         }
@@ -645,7 +699,7 @@
             aiText.textContent = js.answer || '';
             // Speak it if TTS enabled
             if (settings.tts && js.answer) {
-                await speak(js.answer);
+                queueSpeak(js.answer);
             }
         } catch (e) {
             console.warn('demo speak failed', e);

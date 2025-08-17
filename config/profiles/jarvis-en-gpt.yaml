@@ -3,11 +3,11 @@ chatbot:
   identity:
     gender: "male"
     age: 43
-    language: "nl-BE"
+    language: "en-US"
     timezone: "Europe/Brussels"
   personality:
-    style: "intelligent, geestig, behulpzaam"
-    boundaries: "SFW, respectvol"
+    style: "polished, witty, articulate, slightly formal"
+    boundaries: "SFW, respectful, never rude or dismissive"
 
 user:
   name: "User"
@@ -15,23 +15,23 @@ user:
 llm:
   provider: "ollama"
   base_url: "http://localhost:11434"
-  model: "CognitiveComputations/dolphin-mistral-nemo"
+  model: "gpt-oss:20b"
   temperature: 0.5
   max_tokens: 1024
   request_timeout: 90
   num_ctx: 6144
 
 prompt:
-  system_template: "src/bot/prompt/system_prompt_jarvis-nl.txt"
+  system_template: "src/bot/prompt/system_prompt.txt"
 
 logging:
   dir: "logs"
-  session_prefix: "jarvis-nl_chat"
+  session_prefix: "jarvis-en-gpt_chat"
   format: "jsonl"
 
 rag:
   enabled: true
-  store_path: "data/rag/jarvis-nl_store.jsonl"
+  store_path: "data/rag/jarvis-en-gpt_store.jsonl"
   chunk_messages: 4
   summary_max_words: 120
   tags: ["session-summary"]
@@ -40,7 +40,7 @@ rag:
 
 retriever:
   enabled: true
-  store_path: "data/rag/jarvis-nl_store.jsonl"
+  store_path: "data/rag/jarvis-en-gpt_store.jsonl"
   top_k: 4
   max_note_words: 60
   require_tags: []
@@ -57,14 +57,14 @@ audio:
   tts:
     enabled: false
     engine: "piper"
-    voice: "nl_BE-rdh-medium"    # file basename (without .onnx)
+    voice: "en_US-bryce-medium"    # file basename (without .onnx)
     model_dir: "./data/piper"      # contains <voice>.onnx and <voice>.onnx.json
     sample_rate: 22050
   stt:
     enabled: false
     engine: "faster-whisper"
     model_size: "base"             # tiny/base/small/medium/large-v3
-    device: "cpu"                  # "cpu" or "cuda" for GPU
+    device: "cuda"                  # "cpu" or "cuda" for GPU
 
 debug:
   enable_debug_endpoints: true

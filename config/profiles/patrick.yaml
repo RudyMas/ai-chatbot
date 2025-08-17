@@ -50,6 +50,7 @@ retriever:
 chat:
   use_chat_api: true
   history_max_messages: 12
+  demo_mode: false
 
 # NEW: Audio + Debug
 audio:

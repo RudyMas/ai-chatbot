@@ -1,6 +1,6 @@
 [project]
 name = "ai-chatbot"
-version = "0.0.1"
+version = "0.1.1"
 description = "Config-driven local AI chatbot framework (modular, Ollama-first)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -10,7 +10,8 @@ dependencies = [
     "fastapi>=0.111.0",
     "uvicorn>=0.30.0",
     "python-multipart>=0.0.6",
-    "faster-whisper",
+    "faster-whisper>=1.0.0",
+    "ctranslate2>=4.4.0",
     "soundfile",
 ]
 
