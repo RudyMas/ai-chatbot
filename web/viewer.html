@@ -175,6 +175,7 @@
             <button id="btnDemoSpeak" class="btn">💡 Demo Speak</button>
             <label><input type="checkbox" id="chkMute"> Mute AI (store only)</label>
             <label><input type="checkbox" id="chkStop"> Stop Listening</label>
+            <label><input type="checkbox" id="chkBg"> Keep listening in background</label>
             <span><span class="dot off" id="dotListen"></span>Listening</span>
             <span><span class="dot off" id="dotSpeak"></span>Speaking</span>
         </div>
@@ -215,6 +216,10 @@
     const btnDemoSpeak = document.getElementById('btnDemoSpeak');
     const chkMute = document.getElementById('chkMute');
     const chkStop = document.getElementById('chkStop');
+    const chkBg = document.getElementById('chkBg');
+    chkBg.addEventListener('change', () => {
+        keepListeningInBackground = chkBg.checked;
+    });
     const dotListen = document.getElementById('dotListen');
     const dotSpeak = document.getElementById('dotSpeak');
     const stProfile = document.getElementById('stProfile');
@@ -301,6 +306,7 @@
     let micKeepalive = null;
     let ttsActive = false;      // true while we’re preparing/playing TTS
     let restartTimer = null;    // single pending restart timer
+    let keepListeningInBackground = false;
     const RESTART_BACKOFF_MAX = 4000;
     const WATCHDOG_IDLE_MS = 36000000; // restart if no SR activity for this long (when not speaking)
 
@@ -386,7 +392,7 @@
     }
 
     function scheduleRecogRestart() {
-        if (manualStop || ttsActive) return;        // <— block during TTS
+        if (manualStop) return;        // <— block during TTS
         const delay = restartBackoffMs;
         restartBackoffMs = Math.min(restartBackoffMs * 2, RESTART_BACKOFF_MAX);
 
@@ -403,7 +409,7 @@
         const r = ensureRecog();
         if (!r) return;
         if (listening) return;
-        if (chkStop.checked || document.hidden || speaking()) return;
+        if (chkStop.checked || (document.hidden && !keepListeningInBackground) || speaking()) return;
         try {
             manualStop = false;
             r.lang = settings.lang;
@@ -416,6 +422,10 @@
     }
 
     function stopRecog(manual = true) {
+        if (restartTimer) {
+            clearTimeout(restartTimer);
+            restartTimer = null;
+        }
         if (recog) {
             try {
                 recog.stop();
@@ -520,7 +530,7 @@
             const now = Date.now();
 
             // Skip if not listening, muted, stopped, hidden, or currently speaking
-            if (manualStop || chkMute.checked || chkStop.checked || document.hidden || speaking()) return;
+            if (manualStop || chkMute.checked || chkStop.checked || (document.hidden && !keepListeningInBackground) || speaking()) return;
 
             // Respect cooldown
             if (now < idleCooldownUntil) return;
@@ -562,7 +572,7 @@
         stopWatchdog();
         watchdogTimer = setInterval(() => {
             // If the user manually stopped, or tab hidden, or we’re speaking, do nothing
-            if (manualStop || document.hidden || speaking()) return; // speaking() now covers TTS
+            if (manualStop || (document.hidden && !keepListeningInBackground) || speaking()) return; // speaking() now covers TTS
 
             const now = Date.now();
             // If we haven't seen SR activity for a while, restart it
@@ -603,6 +613,7 @@
     // --- Start/Stop button & checkboxes ---
     btnStart.addEventListener('click', () => {
         if (!listening) {
+            manualStop = false;
             tryStartRecog();
             startMicKeepalive();
             idleCooldownUntil = Date.now() + settings.idleSec * 1000; // grace
@@ -660,15 +671,35 @@
     // --- Visibility handling ---
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
-            if (listening) stopRecog(false);
-            stopListeningTimers();
+            if (!keepListeningInBackground && listening) {
+                stopRecog(false);
+                stopListeningTimers();
+            }
         } else {
-            if (!chkStop.checked) {
+            if (!chkStop.checked && !manualStop) {
+                if (!keepListeningInBackground) {
+                    tryStartRecog();
+                    startMicKeepalive();
+                    // Grace period on resume
+                    idleCooldownUntil = Date.now() + settings.idleSec * 1000;
+                    startListeningTimers();
+                }
+            }
+        }
+    });
+
+    window.addEventListener('blur', () => {
+        // If we’re *not* keeping background listening, pause on blur.
+        if (!keepListeningInBackground && listening) {
+            stopRecog(false);
+        }
+    });
+
+    window.addEventListener('focus', () => {
+        // Only resume if not manually stopped and not hard-stopped via checkbox
+        if (!chkStop.checked && !manualStop) {
+            if (!keepListeningInBackground) {
                 tryStartRecog();
-                startMicKeepalive();
-                // Grace period on resume
-                idleCooldownUntil = Date.now() + settings.idleSec * 1000;
-                startListeningTimers();
             }
         }
     });
