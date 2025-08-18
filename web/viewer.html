@@ -186,6 +186,8 @@
         <div class="controls">
             <button id="btnStart" class="btn">▶️ Start Listening</button>
             <button id="btnDemoSpeak" class="btn">💡 Demo Speak</button>
+            <button id="btnStopSpeak" class="btn">⏹ Stop Speaking</button>
+            <label><input type="checkbox" id="chkMd" checked> Render Markdown</label>
             <label><input type="checkbox" id="chkMute"> Mute AI (store only)</label>
             <label><input type="checkbox" id="chkStop"> Stop Listening</label>
             <label><input type="checkbox" id="chkBg"> Keep listening in background</label>
@@ -217,11 +219,12 @@
         profile: qp.get('profile') || 'default',
         tts: /^(1|true|yes)$/i.test(qp.get('tts') || ''),
         stt: /^(1|true|yes)$/i.test(qp.get('stt') || ''),
-        lang: qp.get('lang') || 'en-US', // passed from /debug/context.identity_language
+        lang: qp.get('lang') || 'en-US',
         pollMs: 1200,
         maxChars: 300,
         idleSec: 30,
-        idleCooldownSec: 120
+        idleCooldownSec: 120,
+        renderMarkdown: true // NEW: toggle for on-screen Markdown
     };
 
     // UI refs
@@ -229,6 +232,8 @@
     const userText = document.getElementById('userText');
     const btnStart = document.getElementById('btnStart');
     const btnDemoSpeak = document.getElementById('btnDemoSpeak');
+    const btnStopSpeak = document.getElementById('btnStopSpeak'); // NEW
+    const chkMd = document.getElementById('chkMd'); // NEW
     const chkMute = document.getElementById('chkMute');
     const chkStop = document.getElementById('chkStop');
     const chkBg = document.getElementById('chkBg');
@@ -246,9 +251,12 @@
     const player = document.getElementById('player');
     const toast = document.getElementById('toast');
 
+    // Store raw last assistant text for re-rendering on toggle
+    let lastAssistantRaw = '';
+
     // --- Markdown -> speakable text (drop code, links, formatting) ---
     function stripCodeFences(md) {
-        return md.replace(/```[\s\S]*?```/g, '');
+        return (md || '').replace(/```[\s\S]*?```/g, '');
     }
 
     function replaceInlineCode(md) {
@@ -310,10 +318,22 @@
         return t;
     }
 
-    function renderAssistantMarkdown(md) {
-        const html = marked.parse(md || '', {gfm: true, breaks: true});
-        aiText.innerHTML = DOMPurify.sanitize(html, {USE_PROFILES: {html: true}});
+    // --- On-screen rendering (toggle-aware) ---
+    function renderAssistant(md) {
+        if (settings.renderMarkdown) {
+            const html = marked.parse(md || '', {gfm: true, breaks: true});
+            aiText.innerHTML = DOMPurify.sanitize(html, {USE_PROFILES: {html: true}});
+        } else {
+            aiText.textContent = md || '';
+        }
     }
+
+    // Toggle handler
+    chkMd.checked = true;
+    chkMd.addEventListener('change', () => {
+        settings.renderMarkdown = chkMd.checked;
+        renderAssistant(lastAssistantRaw);
+    });
 
     function setListen(on) {
         dotListen.className = 'dot ' + (on ? 'ok' : 'off');
@@ -343,15 +363,14 @@
         try {
             const url = '/debug/context?' + new URLSearchParams({user: settings.user, session: settings.session});
             const r = await fetch(url);
-            if (!r.ok) {
-                throw new Error(await r.text());
-            }
+            if (!r.ok) throw new Error(await r.text());
             const js = await r.json();
             const turns = js.short_term_turns || [];
             // last assistant
             for (let i = turns.length - 1; i >= 0; i--) {
                 if (turns[i][0] === 'assistant') {
-                    renderAssistantMarkdown(turns[i][1] || '');
+                    lastAssistantRaw = turns[i][1] || '';
+                    renderAssistant(lastAssistantRaw);
                     break;
                 }
             }
@@ -389,13 +408,14 @@
     let lastErrorAt = 0;        // throttle visible error toasts/logs
     let micKeepalive = null;
     let ttsActive = false;      // true while we’re preparing/playing TTS
+
     // --- TTS Queue ---
     const ttsQueue = [];
-    let ttsProcessing = false
+    let ttsProcessing = false;
     let restartTimer = null;    // single pending restart timer
     let keepListeningInBackground = false;
     const RESTART_BACKOFF_MAX = 4000;
-    const WATCHDOG_IDLE_MS = 36000000; // restart if no SR activity for this long (when not speaking)
+    const WATCHDOG_IDLE_MS = 36000000;
 
     function bumpActivity() {
         lastRecogEventAt = Date.now();
@@ -443,19 +463,12 @@
         };
 
         r.onerror = (ev) => {
-            // Keep a heartbeat so the watchdog knows SR is alive
             bumpActivity();
-
-            // Harmless/transient cases: auto-restart quietly (no toast)
             if (ev.error === 'no-speech' || ev.error === 'network' || ev.error === 'aborted' || ev.error === 'audio-capture') {
-                // Comment out the console line below if you want complete silence:
-                // console.debug('recog transient:', ev.error);
                 listening = false;
                 scheduleRecogRestart();
                 return;
             }
-
-            // Anything else: throttle to one visible report per 10s
             const now = Date.now();
             if (now - lastErrorAt > 10000) {
                 console.warn('recog error', ev.error);
@@ -468,7 +481,6 @@
             setListen(false);
             bumpActivity();
             listening = false;
-            // Auto-restart unless we stopped manually, tab hidden, or speaking
             if (!manualStop && !document.hidden && !speaking()) {
                 scheduleRecogRestart();
             }
@@ -479,13 +491,10 @@
     }
 
     function scheduleRecogRestart() {
-        if (manualStop) return;        // <— block during TTS
+        if (manualStop) return;
         const delay = restartBackoffMs;
         restartBackoffMs = Math.min(restartBackoffMs * 2, RESTART_BACKOFF_MAX);
-
-        if (restartTimer) {
-            clearTimeout(restartTimer);
-        }  // <— collapse to one timer
+        if (restartTimer) clearTimeout(restartTimer);
         restartTimer = setTimeout(() => {
             restartTimer = null;
             tryStartRecog();
@@ -543,6 +552,52 @@
         if (!ttsProcessing) processTTSQueue();
     }
 
+    // Allow cancel from outside:
+    let cancelSpeakOnce = null;
+    let currentTTSUrl = null;
+
+    // NEW: Stop Speaking (button + 'S' key)
+    function stopSpeaking() {
+        try {
+            ttsQueue.length = 0;
+        } catch {
+        }
+        if (cancelSpeakOnce) {
+            try {
+                cancelSpeakOnce();
+            } catch {
+            } finally {
+                cancelSpeakOnce = null;
+            }
+        }
+        try {
+            player.pause();
+        } catch {
+        }
+        try {
+            player.removeAttribute('src');
+            player.load();
+        } catch {
+        }
+        try {
+            if (currentTTSUrl) {
+                URL.revokeObjectURL(currentTTSUrl);
+                currentTTSUrl = null;
+            }
+        } catch {
+        }
+        setSpeak(false);
+        ttsActive = false;
+        ttsProcessing = false;
+        lastSpokeAt = Date.now();
+        if (!chkStop.checked) tryStartRecog();
+    }
+
+    btnStopSpeak.addEventListener('click', stopSpeaking);
+    document.addEventListener('keydown', (e) => {
+        if (e.key.toLowerCase() === 's' && !e.repeat) stopSpeaking();
+    });
+
     async function processTTSQueue() {
         if (ttsProcessing) return;
         ttsProcessing = true;
@@ -576,6 +631,7 @@
             }
             const blob = await resp.blob();
             const url = URL.createObjectURL(blob);
+            currentTTSUrl = url;
             player.src = url;
 
             try {
@@ -587,21 +643,27 @@
                 const cleanup = () => {
                     player.removeEventListener('ended', onEnd);
                     player.removeEventListener('error', onErr);
-                    URL.revokeObjectURL(url);
+                    try {
+                        URL.revokeObjectURL(currentTTSUrl || url);
+                    } catch {
+                    }
+                    currentTTSUrl = null;
                     resolve();
                 };
+                cancelSpeakOnce = cleanup;
                 const onEnd = () => cleanup();
                 const onErr = () => cleanup();
                 player.addEventListener('ended', onEnd, {once: true});
                 player.addEventListener('error', onErr, {once: true});
             });
+
+            cancelSpeakOnce = null; // consumed
         } catch (e) {
             console.warn('speakOnce error', e);
         }
     }
 
     player.addEventListener('ended', () => {
-        // Only flip indicators & resume if we're NOT processing a queued batch
         if (!ttsProcessing) {
             setSpeak(false);
             ttsActive = false;
@@ -623,7 +685,6 @@
         const clipped = text.length > settings.maxChars ? (text.slice(0, settings.maxChars) + '…') : text;
 
         if (chkMute.checked) {
-            // Store in short-term buffer AND RAG (server-side), no LLM reply
             const body = {
                 message: clipped,
                 user: settings.user,
@@ -636,13 +697,10 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(body)
             });
-            if (!r.ok) {
-                console.warn('listen_only fail', await r.text());
-            }
+            if (!r.ok) console.warn('listen_only fail', await r.text());
             return;
         }
 
-        // Ask model
         const body = {message: clipped, user: settings.user, session: settings.session};
         const r = await fetch('/chat', {
             method: 'POST',
@@ -654,6 +712,10 @@
             return;
         }
         const js = await r.json();
+        // Show in UI too? The poller will pick it up shortly; optional immediate render:
+        lastAssistantRaw = js.answer || '';
+        renderAssistant(lastAssistantRaw);
+
         if (settings.tts) {
             const speakable = markdownToSpeakable(js.answer || '');
             queueSpeak(speakable);
@@ -668,16 +730,10 @@
         idleTimer = setInterval(async () => {
             const now = Date.now();
 
-            // Stay quiet (no idle nudge) while hidden in background-listen mode
             if (document.hidden && keepListeningInBackground) return;
-
-            // Skip if not listening, muted, stopped, hidden w/o bg, or currently speaking
             if (manualStop || chkMute.checked || chkStop.checked || (document.hidden && !keepListeningInBackground) || speaking()) return;
-
-            // Respect cooldown
             if (now < idleCooldownUntil) return;
 
-            // Silence duration = since last user speech AND since last AI speech
             const silentFor = Math.min(
                 now - (lastHeardAt || 0),
                 now - (lastSpokeAt || 0)
@@ -697,6 +753,9 @@
                     });
                     if (r.ok) {
                         const js = await r.json();
+                        lastAssistantRaw = js.answer || '';
+                        renderAssistant(lastAssistantRaw);
+
                         if (settings.tts) {
                             const speakable = markdownToSpeakable(js.answer || '');
                             await speak(speakable);
@@ -715,11 +774,8 @@
     function startWatchdog() {
         stopWatchdog();
         watchdogTimer = setInterval(() => {
-            // If the user manually stopped, or tab hidden, or we’re speaking, do nothing
-            if (manualStop || (document.hidden && !keepListeningInBackground) || speaking()) return; // speaking() now covers TTS
-
+            if (manualStop || (document.hidden && !keepListeningInBackground) || speaking()) return;
             const now = Date.now();
-            // If we haven't seen SR activity for a while, restart it
             if (now - lastRecogEventAt > WATCHDOG_IDLE_MS) {
                 try {
                     stopRecog(false);
@@ -738,10 +794,8 @@
     }
 
     function startListeningTimers() {
-        // Grace period so the idle loop doesn’t fire immediately
         idleCooldownUntil = Date.now() + settings.idleSec * 1000;
         idleInFlight = false;
-
         startIdleLoop();
         startWatchdog();
     }
@@ -772,9 +826,7 @@
 
     btnDemoSpeak.addEventListener('click', async () => {
         try {
-            // Pause listening while we trigger the remark
             stopRecog(false);
-
             const r = await fetch('/demo/speak', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -785,9 +837,8 @@
                 return;
             }
             const js = await r.json();
-            // Show it in the UI
-            renderAssistantMarkdown(js.answer || '');
-            // Speak it if TTS enabled
+            lastAssistantRaw = js.answer || '';
+            renderAssistant(lastAssistantRaw);
             if (settings.tts && js.answer) {
                 const speakable = markdownToSpeakable(js.answer);
                 queueSpeak(speakable);
@@ -825,7 +876,6 @@
                 if (!keepListeningInBackground) {
                     tryStartRecog();
                     startMicKeepalive();
-                    // Grace period on resume
                     idleCooldownUntil = Date.now() + settings.idleSec * 1000;
                     startListeningTimers();
                 }
@@ -834,14 +884,12 @@
     });
 
     window.addEventListener('blur', () => {
-        // If we’re *not* keeping background listening, pause on blur.
         if (!keepListeningInBackground && listening) {
             stopRecog(false);
         }
     });
 
     window.addEventListener('focus', () => {
-        // Only resume if not manually stopped and not hard-stopped via checkbox
         if (!chkStop.checked && !manualStop) {
             if (!keepListeningInBackground) {
                 tryStartRecog();
@@ -853,16 +901,10 @@
         if (micKeepalive) return;
         try {
             micKeepalive = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true
-                }
+                audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}
             });
-            // We don't attach it anywhere; just keeping the track open
         } catch (e) {
-            // Non-fatal; Web Speech will still run without this
-            // console.debug('keepalive mic denied', e);
+            // Non-fatal
         }
     }
 
@@ -879,12 +921,14 @@
     if (navigator.brave && navigator.brave.isBrave) {
         navigator.brave.isBrave().then(isBrave => {
             if (isBrave) {
-                aiText.textContent = "Brave browser detected. Web Speech API doesn't work in Brave. Please use Chrome or Edge.";
-                queueSpeak("Brave browser detected. Web Speech API doesn't work in Brave. Please use Chrome or Edge.");
+                lastAssistantRaw = "Brave browser detected. Web Speech API doesn't work in Brave. Please use Chrome or Edge.";
+                renderAssistant(lastAssistantRaw);
+                queueSpeak(lastAssistantRaw);
                 btnStart.disabled = true;
             }
         });
     }
+
     // --- Init ---
     (function init() {
         pollDebug();
