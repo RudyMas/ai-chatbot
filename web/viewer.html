@@ -65,6 +65,19 @@
             font-size: 1.1rem;
         }
 
+        .bubble pre {
+            background: #0b0f17;
+            border: 1px solid #1b2430;
+            padding: 12px;
+            border-radius: 8px;
+            overflow: auto;
+        }
+
+        .bubble code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+            font-size: 0.95rem;
+        }
+
         .footer {
             display: grid;
             grid-template-columns: 1fr auto;
@@ -193,6 +206,8 @@
 
 <audio id="player" preload="auto" style="display:none"></audio>
 
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
 <script>
     // --- Query params & settings ---
     const qp = new URLSearchParams(location.search);
@@ -231,6 +246,75 @@
     const player = document.getElementById('player');
     const toast = document.getElementById('toast');
 
+    // --- Markdown -> speakable text (drop code, links, formatting) ---
+    function stripCodeFences(md) {
+        return md.replace(/```[\s\S]*?```/g, '');
+    }
+
+    function replaceInlineCode(md) {
+        return md.replace(/`([^`]+)`/g, '“$1”');
+    }
+
+    function replaceImages(md) {
+        return md.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1');
+    }
+
+    function replaceLinks(md) {
+        return md.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1');
+    }
+
+    function blockquotes(md) {
+        return md.replace(/^\s*>\s?/gm, 'Quote: ');
+    }
+
+    function listsToBullets(md) {
+        return md.replace(/^\s*[-*+]\s+/gm, '• ')
+            .replace(/^\s*\d+\.\s+/gm, '• ');
+    }
+
+    function stripEmphasis(md) {
+        return md.replace(/(\*\*|__)(.*?)\1/g, '$2')
+            .replace(/(\*|_)(.*?)\1/g, '$2')
+            .replace(/~~(.*?)~~/g, '$1');
+    }
+
+    function demoteHeadings(md) {
+        return md.replace(/^\s{0,3}#{1,6}\s+/gm, '');
+    }
+
+    function stripHtml(htmlish) {
+        const div = document.createElement('div');
+        div.innerHTML = htmlish;
+        return div.textContent || div.innerText || '';
+    }
+
+    function normalizeWhitespace(t) {
+        return t.replace(/[ \t]+\n/g, '\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .replace(/[ \t]{2,}/g, ' ')
+            .trim();
+    }
+
+    function markdownToSpeakable(md) {
+        let t = md || '';
+        t = stripCodeFences(t);
+        t = replaceInlineCode(t);
+        t = replaceImages(t);
+        t = replaceLinks(t);
+        t = blockquotes(t);
+        t = listsToBullets(t);
+        t = demoteHeadings(t);
+        t = stripEmphasis(t);
+        t = stripHtml(t);
+        t = normalizeWhitespace(t);
+        return t;
+    }
+
+    function renderAssistantMarkdown(md) {
+        const html = marked.parse(md || '', {gfm: true, breaks: true});
+        aiText.innerHTML = DOMPurify.sanitize(html, {USE_PROFILES: {html: true}});
+    }
+
     function setListen(on) {
         dotListen.className = 'dot ' + (on ? 'ok' : 'off');
     }
@@ -267,7 +351,7 @@
             // last assistant
             for (let i = turns.length - 1; i >= 0; i--) {
                 if (turns[i][0] === 'assistant') {
-                    aiText.textContent = turns[i][1] || '';
+                    renderAssistantMarkdown(turns[i][1] || '');
                     break;
                 }
             }
@@ -571,7 +655,8 @@
         }
         const js = await r.json();
         if (settings.tts) {
-            queueSpeak(js.answer || '');
+            const speakable = markdownToSpeakable(js.answer || '');
+            queueSpeak(speakable);
         } else {
             lastSpokeAt = Date.now();
         }
@@ -612,8 +697,10 @@
                     });
                     if (r.ok) {
                         const js = await r.json();
-                        if (settings.tts) await speak(js.answer || '');
-                        else lastSpokeAt = Date.now();
+                        if (settings.tts) {
+                            const speakable = markdownToSpeakable(js.answer || '');
+                            await speak(speakable);
+                        } else lastSpokeAt = Date.now();
                     }
                 } catch (e) {
                     console.warn('idle nudge error', e);
@@ -699,10 +786,11 @@
             }
             const js = await r.json();
             // Show it in the UI
-            aiText.textContent = js.answer || '';
+            renderAssistantMarkdown(js.answer || '');
             // Speak it if TTS enabled
             if (settings.tts && js.answer) {
-                queueSpeak(js.answer);
+                const speakable = markdownToSpeakable(js.answer);
+                queueSpeak(speakable);
             }
         } catch (e) {
             console.warn('demo speak failed', e);
