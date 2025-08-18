@@ -319,7 +319,7 @@
 
     function ensureRecog() {
         if (!SR) {
-            showToast('Web Speech API not available');
+            showToast('Web Speech API not available. Please use Chrome or Edge.');
             return null;
         }
         if (recog) return recog;
@@ -447,7 +447,7 @@
     }
 
     async function speak(text) {
-         queueSpeak(text);
+        queueSpeak(text);
     }
 
     function queueSpeak(text) {
@@ -782,6 +782,13 @@
         } catch (_) {
         }
         micKeepalive = null;
+    }
+
+    // --- Brave browser detection ---
+    if ('brave' in navigator) {
+        aiText.textContent = 'Brave browser detected. Web Speech API doesn\'t work in Brave. Please use Chrome or Edge.';
+        queueSpeak('Brave browser detected. Web Speech API doesn\'t work in Brave. Please use Chrome or Edge.');
+        btnStart.disabled = true;
     }
 
     // --- Init ---

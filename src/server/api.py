@@ -10,7 +10,7 @@ import tempfile
 import subprocess
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Body
-from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse
@@ -24,6 +24,7 @@ from bot.rag.store import RAGStore
 from bot.rag.retriever import SimpleRetriever
 from bot.rag.summarizer import summarize_chunk
 from server.state import state, session_buffers, SessionBuffer
+from src.bot.tts_kokoro import kokoro_tts_to_wav_bytes, list_kokoro_voices
 
 # ---------- App bootstrap ----------
 ROOT = Path(__file__).parents[2]
@@ -426,62 +427,70 @@ def speak(
         text: Optional[str] = Query(None),
         text_body: Optional[str] = Body(None),
         text_form: Optional[str] = Form(None),
+        backend_override: Optional[str] = Query(None),  # <-- NEW
+        voice_override: Optional[str] = Query(None),  # <-- NEW
 ):
-    """
-    TTS using Piper. Accepts text via query (?text=...), JSON body {"text": "..."} or form field.
-    Returns a WAV file. Provides clearer error messages on failure.
-    """
-    # Pick the first non-empty source
     txt = (text_body or text_form or text or "").strip()
     if not txt:
         raise HTTPException(status_code=400, detail="Missing 'text' (query, JSON body, or form).")
-
-    # (Optional) Cap extremely long inputs to avoid piper misbehavior on huge paragraphs
     if len(txt) > 4000:
         txt = txt[:4000] + " …"
 
-    # pull audio config
     tts_cfg, _ = _audio_cfg()
-    voice = tts_cfg.get("voice", "en_US-lessac-medium")
-    model_dir = tts_cfg.get("model_dir", "./data/piper")
-    sr = int(tts_cfg.get("sample_rate", 22050))
-
-    model_path = os.path.join(model_dir, f"{voice}.onnx")
-    config_path = os.path.join(model_dir, f"{voice}.onnx.json")
-
-    if not os.path.exists(model_path):
-        raise HTTPException(status_code=500, detail=f"Piper model not found: {model_path}")
-    if not os.path.exists(config_path):
-        raise HTTPException(status_code=500, detail=f"Piper config not found: {config_path}")
-
-    piper_bin = "piper.exe" if os.name == "nt" else "piper"
-    tmp_wav = os.path.join(tempfile.gettempdir(), f"tts_{uuid.uuid4().hex}.wav")
+    backend = (backend_override or tts_cfg.get("backend") or "piper").lower()
 
     try:
-        # Feed text on stdin
+        if backend == "kokoro":
+            kcfg = tts_cfg.get("kokoro") or {}
+            model_path = kcfg.get("model") or "models/kokoro-v1.0.onnx"
+            voices_file = kcfg.get("voices") or "models/voices-v1.0.bin"
+            voice = (voice_override or kcfg.get("default_voice") or "af_sarah")
+
+            # Cast numerics explicitly to float to avoid int32 -> float mismatch
+            speed = float(kcfg.get("speed", 1.0))
+            rate = float(kcfg.get("rate", 1.0))
+            pitch = float(kcfg.get("pitch", 1.0))
+            energy = float(kcfg.get("energy", 1.0))
+
+            wav_bytes = kokoro_tts_to_wav_bytes(
+                text=txt, voice=voice,
+                model_path=model_path, voices_file=voices_file,
+                speed=speed, lang=kcfg.get("lang", "en-us"),
+                # if your helper supports extra kwargs, pass rate/pitch/energy too
+            )
+            return Response(content=wav_bytes, media_type="audio/wav")
+
+        # ----- Piper (original path) -----
+        voice = tts_cfg.get("voice", "en_US-lessac-medium")
+        model_dir = tts_cfg.get("model_dir", "./data/piper")
+        sr = int(tts_cfg.get("sample_rate", 22050))
+        model_path = os.path.join(model_dir, f"{voice}.onnx")
+        config_path = os.path.join(model_dir, f"{voice}.onnx.json")
+        if not os.path.exists(model_path):
+            raise HTTPException(status_code=500, detail=f"Piper model not found: {model_path}")
+        if not os.path.exists(config_path):
+            raise HTTPException(status_code=500, detail=f"Piper config not found: {config_path}")
+
+        piper_bin = "piper.exe" if os.name == "nt" else "piper"
+        tmp_wav = os.path.join(tempfile.gettempdir(), f"tts_{uuid.uuid4().hex}.wav")
         proc = subprocess.run(
-            [piper_bin, "--model", model_path, "--config", config_path, "--output_file", tmp_wav, "--sample_rate",
-             str(sr)],
+            [piper_bin, "--model", model_path, "--config", config_path,
+             "--output_file", tmp_wav, "--sample_rate", str(sr)],
             input=txt.encode("utf-8"),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,  # we'll handle returncode ourselves for better messages
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
         )
         if proc.returncode != 0:
             err = proc.stderr.decode("utf-8", "ignore").strip()
             raise HTTPException(status_code=500, detail=f"Piper failed (code {proc.returncode}): {err[:800]}")
-
         if not os.path.exists(tmp_wav) or os.path.getsize(tmp_wav) == 0:
             raise HTTPException(status_code=500, detail="Piper produced no audio (empty file).")
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="Piper binary not found on PATH (piper/piper.exe).")
+        return FileResponse(tmp_wav, media_type="audio/wav", filename="speech.wav",
+                            headers={"X-TTS-Backend": "piper", "X-TTS-Voice": voice})
+
     except HTTPException:
-        # re-raise our detailed messages
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"TTS error: {e}")
-
-    return FileResponse(tmp_wav, media_type="audio/wav", filename="speech.wav")
 
 
 # ---------- New: STT ----------
@@ -866,3 +875,49 @@ def memory_clean(inp: MemoryCleanIn):
     _write_store_all(new_entries)
 
     return {"ok": True, "removed": total_removed, "remaining": len(new_entries)}
+
+
+@app.get("/voices")
+def get_voices(backend_override: Optional[str] = Query(None)):
+    """
+    Lists available voices for the active TTS backend.
+    - Kokoro: reads names from voices-v1.0.bin via kokoro-onnx
+    - Piper: lists *.onnx that have a matching .onnx.json config
+    """
+    tts_cfg, _ = _audio_cfg()
+    backend = (backend_override or tts_cfg.get("backend") or "piper").lower()
+
+    if backend == "kokoro":
+        kcfg = tts_cfg.get("kokoro") or {}
+        model_path  = kcfg.get("model")  or "models/kokoro-v1.0.onnx"
+        voices_file = kcfg.get("voices") or "models/voices-v1.0.bin"  # single multi-voice file
+        names = list_kokoro_voices(model_path, voices_file)
+        return {"backend": "kokoro", "count": len(names), "voices": names}
+
+    # Piper fallback (kept for convenience)
+    model_dir = tts_cfg.get("model_dir", "./data/piper")
+    voices = []
+    try:
+        for f in os.listdir(model_dir):
+            if f.endswith(".onnx"):
+                base = f[:-5]
+                if os.path.exists(os.path.join(model_dir, base + ".onnx.json")):
+                    voices.append(base)
+    except FileNotFoundError:
+        pass
+    voices.sort()
+    return {"backend": "piper", "count": len(voices), "voices": voices}
+
+@app.get("/debug/tts")
+def debug_tts():
+    tts_cfg, _ = _audio_cfg()
+    backend = (tts_cfg.get("backend") or "piper").lower()
+    out = {"backend": backend, "cfg": tts_cfg}
+    if backend == "kokoro":
+        kcfg = tts_cfg.get("kokoro") or {}
+        out["kokoro"] = {
+            "model": kcfg.get("model"),
+            "voices_dir": kcfg.get("voices"),
+            "default_voice": kcfg.get("default_voice"),
+        }
+    return out

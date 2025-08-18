@@ -1,6 +1,6 @@
 [project]
 name = "ai-chatbot"
-version = "0.1.1"
+version = "0.2.0"
 description = "Config-driven local AI chatbot framework (modular, Ollama-first)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,7 +12,9 @@ dependencies = [
     "python-multipart>=0.0.6",
     "faster-whisper>=1.0.0",
     "ctranslate2>=4.4.0",
-    "soundfile",
+    "kokoro-onnx>=0.4.9",
+    "onnxruntime>=1.20.1",
+    "soundfile>=0.13.1",
 ]
 
 [project.optional-dependencies]
