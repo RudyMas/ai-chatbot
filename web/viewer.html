@@ -583,7 +583,10 @@
         idleTimer = setInterval(async () => {
             const now = Date.now();
 
-            // Skip if not listening, muted, stopped, hidden, or currently speaking
+            // NEW: stay quiet in background-listen mode
+            if (document.hidden && keepListeningInBackground) return;
+
+            // Skip if not listening, muted, stopped, or speaking
             if (manualStop || chkMute.checked || chkStop.checked || (document.hidden && !keepListeningInBackground) || speaking()) return;
 
             // Respect cooldown
@@ -596,8 +599,8 @@
             );
 
             if (!idleInFlight && silentFor >= settings.idleSec * 1000) {
-                idleInFlight = true; // lock immediately
-                idleCooldownUntil = now + settings.idleCooldownSec * 1000; // set cooldown immediately
+                idleInFlight = true;
+                idleCooldownUntil = now + settings.idleCooldownSec * 1000;
 
                 try {
                     const prompt = "No one has spoken for 30 seconds; say something brief and relevant.";
@@ -615,7 +618,7 @@
                 } catch (e) {
                     console.warn('idle nudge error', e);
                 } finally {
-                    idleInFlight = false; // release lock
+                    idleInFlight = false;
                 }
             }
         }, 1000);
