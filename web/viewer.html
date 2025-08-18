@@ -788,12 +788,15 @@
     }
 
     // --- Brave browser detection ---
-    if ('brave' in navigator) {
-        aiText.textContent = 'Brave browser detected. Web Speech API doesn\'t work in Brave. Please use Chrome or Edge.';
-        queueSpeak('Brave browser detected. Web Speech API doesn\'t work in Brave. Please use Chrome or Edge.');
-        btnStart.disabled = true;
+    if (navigator.brave && navigator.brave.isBrave) {
+        navigator.brave.isBrave().then(isBrave => {
+            if (isBrave) {
+                aiText.textContent = "Brave browser detected. Web Speech API doesn't work in Brave. Please use Chrome or Edge.";
+                queueSpeak("Brave browser detected. Web Speech API doesn't work in Brave. Please use Chrome or Edge.");
+                btnStart.disabled = true;
+            }
+        });
     }
-
     // --- Init ---
     (function init() {
         pollDebug();

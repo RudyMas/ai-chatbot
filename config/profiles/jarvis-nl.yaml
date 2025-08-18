@@ -56,15 +56,24 @@ chat:
 audio:
   tts:
     enabled: false
-    engine: "piper"
+    backend: "piper"
+    # Setting for Piper
     voice: "nl_BE-rdh-medium"    # file basename (without .onnx)
     model_dir: "./data/piper"      # contains <voice>.onnx and <voice>.onnx.json
     sample_rate: 22050
+    # Setting for Kokoro
+    kokoro:
+      model: models/kokoro-v1.0.fp16.onnx
+      voices: models/voices-v1.0.bin
+      default_voice: bm_lewis
+      speed: 1.0
+      # optional: quantized model works too (smaller/faster)
+      # model: models/kokoro-v1.0-quant.onnx
   stt:
     enabled: false
     engine: "faster-whisper"
     model_size: "base"             # tiny/base/small/medium/large-v3
-    device: "cpu"                  # "cpu" or "cuda" for GPU
+    device: "cuda"                  # "cpu" or "cuda" for GPU
 
 debug:
   enable_debug_endpoints: true

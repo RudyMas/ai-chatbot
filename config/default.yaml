@@ -63,7 +63,7 @@ audio:
     sample_rate: 22050
     # Setting for Kokoro
     kokoro:
-      model: models/kokoro-v1.0.onnx
+      model: models/kokoro-v1.0.fp16.onnx
       voices: models/voices-v1.0.bin
       default_voice: bm_lewis
       speed: 1.0
