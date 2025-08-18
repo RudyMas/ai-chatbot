@@ -583,10 +583,10 @@
         idleTimer = setInterval(async () => {
             const now = Date.now();
 
-            // NEW: stay quiet in background-listen mode
+            // Stay quiet (no idle nudge) while hidden in background-listen mode
             if (document.hidden && keepListeningInBackground) return;
 
-            // Skip if not listening, muted, stopped, or speaking
+            // Skip if not listening, muted, stopped, hidden w/o bg, or currently speaking
             if (manualStop || chkMute.checked || chkStop.checked || (document.hidden && !keepListeningInBackground) || speaking()) return;
 
             // Respect cooldown
