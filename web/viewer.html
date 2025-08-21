@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en-US">
 <head>
     <meta charset="utf-8"/>
     <title>Voice Viewer</title>
@@ -253,6 +253,7 @@
 
     // Store raw last assistant text for re-rendering on toggle
     let lastAssistantRaw = '';
+    let assistantName = 'Assistant';
 
     // --- Markdown -> speakable text (drop code, links, formatting) ---
     function stripCodeFences(md) {
@@ -303,6 +304,12 @@
             .trim();
     }
 
+    function stripAssistantName(text) {
+        if (!text || !assistantName) return text;
+        const nameRegex = new RegExp(`^${assistantName}:\\s*`, 'i');
+        return text.replace(nameRegex, '').trim();
+    }
+
     function markdownToSpeakable(md) {
         let t = md || '';
         t = stripCodeFences(t);
@@ -315,6 +322,7 @@
         t = stripEmphasis(t);
         t = stripHtml(t);
         t = normalizeWhitespace(t);
+        t = stripAssistantName(t);
         return t;
     }
 
@@ -384,6 +392,7 @@
             stProfile.textContent = `profile=${js.active_profile || settings.profile}`;
             stFlags.textContent = `tts=${js.tts_enabled} stt=${js.stt_enabled}`;
             stTime.textContent = new Date().toLocaleTimeString();
+            assistantName = js.identity_name;
         } catch (e) {
             console.warn('debug/context error', e);
         } finally {
@@ -618,7 +627,7 @@
             ttsActive = false;
             ttsProcessing = false;
             lastSpokeAt = Date.now();
-            if (!chkStop.checked) tryStartRecog(); // resume after the whole queue
+            if (!chkStop.checked) await tryStartRecog(); // resume after the whole queue
         }
     }
 
