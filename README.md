@@ -56,7 +56,7 @@ Built for friendly conversations with a persistent personality, voice interactio
 #### For GPU-accelerated STT (optional, NVIDIA only)
 ```bash
   nvidia-smi  # Check your CUDA version
-  conda install -c nvidia cuda-runtime=12.x cudnn=9.1
+  conda install -c nvidia cuda-runtime=12.x cudnn=9
   pip install ctranslate2
 ```
 

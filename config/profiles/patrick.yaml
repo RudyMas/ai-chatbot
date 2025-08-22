@@ -58,9 +58,10 @@ audio:
     enabled: false
     backend: "piper"
     voice: "en-us-lessac-medium"   # file basename (without .onnx)
-    model_dir: "./data/piper"      # contains <voice>.onnx and <voice>.onnx.json
+    model_dir: "./models/piper"      # contains <voice>.onnx and <voice>.onnx.json
     sample_rate: 22050
     # Setting for Kokoro
+    # The model and voices files can be downloaded from: https://github.com/thewh1teagle/kokoro-onnx
     kokoro:
       model: models/kokoro-v1.0.fp16.onnx
       voices: models/voices-v1.0.bin

@@ -59,11 +59,13 @@ audio:
     backend: "kokoro"                # "piper" or "kokoro"
     # Setting for Piper
     voice: "en_US-bryce-medium"    # file basename (without .onnx)
-    model_dir: "./data/piper"      # contains <voice>.onnx and <voice>.onnx.json
+    model_dir: "./models/piper"      # contains <voice>.onnx and <voice>.onnx.json
     sample_rate: 22050
     # Setting for Kokoro
+    # Models and voices can be downloaded from: https://github.com/thewh1teagle/kokoro-onnx
+    # Click on "Releases" on the right side to find the download links.
     kokoro:
-      model: models/kokoro-v1.0.fp16.onnx
+      model: models/kokoro-v1.0.fp16-gpu.onnx
       voices: models/voices-v1.0.bin
       default_voice: bm_lewis
       speed: 1.0
@@ -72,7 +74,7 @@ audio:
   stt:
     enabled: false
     engine: "faster-whisper"
-    model_size: "base"             # tiny/base/small/medium/large-v3
+    model_size: "distil-large-v3"  # tiny/base/small/medium/large-v3/distil-large-v3
     device: "cuda"                 # "cpu" or "cuda" for GPU
 
 debug:

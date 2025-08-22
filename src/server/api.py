@@ -520,7 +520,7 @@ async def transcribe(file: UploadFile = File(...)):
             tmp_path,
             vad_filter=vad,
             # slightly more permissive defaults
-            beam_size=1,
+            beam_size=5,
             best_of=1,
         )
         parts = [seg.text.strip() for seg in segments if getattr(seg, "text", "").strip()]

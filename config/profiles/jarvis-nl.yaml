@@ -59,7 +59,7 @@ audio:
     backend: "piper"
     # Setting for Piper
     voice: "nl_BE-rdh-medium"    # file basename (without .onnx)
-    model_dir: "./data/piper"      # contains <voice>.onnx and <voice>.onnx.json
+    model_dir: "./models/piper"      # contains <voice>.onnx and <voice>.onnx.json
     sample_rate: 22050
     # Setting for Kokoro
     kokoro:

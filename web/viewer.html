@@ -426,6 +426,22 @@
     const RESTART_BACKOFF_MAX = 4000;
     const WATCHDOG_IDLE_MS = 36000000;
 
+    // --- Add these with your other SR variables ---
+    const SILENCE_FINALIZE_MS = 1200; // try 900–1200
+    let pendingFinal = '';           // accumulates true finals until we commit
+    let finalizeTimer = null;
+
+    function scheduleFinalizeCommit() {
+        if (finalizeTimer) clearTimeout(finalizeTimer);
+        finalizeTimer = setTimeout(() => {
+            if (pendingFinal.trim()) {
+                const text = pendingFinal.trim();
+                pendingFinal = '';
+                handleFinalTranscript(text);
+            }
+        }, SILENCE_FINALIZE_MS);
+    }
+
     function bumpActivity() {
         lastRecogEventAt = Date.now();
     }
@@ -457,17 +473,34 @@
 
         r.onresult = (ev) => {
             bumpActivity();
-            let finalText = '';
+
+            let finalChunk = '';
             interimText = '';
+
             for (let i = ev.resultIndex; i < ev.results.length; i++) {
                 const res = ev.results[i];
-                if (res.isFinal) finalText += res[0].transcript;
-                else interimText += res[0].transcript;
+                if (res.isFinal) {
+                    // accumulate final chunks, but don't send yet
+                    finalChunk += res[0].transcript + ' ';
+                } else {
+                    // any interim means you're probably just pausing
+                    interimText += res[0].transcript;
+                }
             }
+
+            // Update "we heard something" timestamps
             if (interimText) lastHeardAt = Date.now();
-            if (finalText.trim()) {
-                lastHeardAt = Date.now();
-                handleFinalTranscript(finalText.trim());
+            if (finalChunk.trim()) lastHeardAt = Date.now();
+
+            // Buffer finals; only commit after a quiet gap
+            if (finalChunk.trim()) {
+                pendingFinal += finalChunk;
+            }
+
+            // Whether we saw interims or finals, reset the finalize timer.
+            // If you keep talking, the timer keeps getting pushed out.
+            if (interimText || finalChunk.trim()) {
+                scheduleFinalizeCommit();
             }
         };
 
@@ -490,6 +523,14 @@
             setListen(false);
             bumpActivity();
             listening = false;
+
+            // If SR ended while we had buffered text, commit it once.
+            if (pendingFinal.trim()) {
+                const text = pendingFinal.trim();
+                pendingFinal = '';
+                handleFinalTranscript(text);
+            }
+
             if (!manualStop && !document.hidden && !speaking()) {
                 scheduleRecogRestart();
             }
