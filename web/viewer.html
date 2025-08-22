@@ -184,23 +184,32 @@
     </div>
     <div class="footer">
         <div class="controls">
-            <button id="btnStart" class="btn">▶️ Start Listening</button>
-            <button id="btnDemoSpeak" class="btn">💡 Demo Speak</button>
-            <button id="btnStopSpeak" class="btn">⏹ Stop Speaking</button>
-            <label><input type="checkbox" id="chkMd" checked> Render Markdown</label>
-            <label><input type="checkbox" id="chkMute"> Mute AI (store only)</label>
-            <label><input type="checkbox" id="chkStop"> Stop Listening</label>
-            <label><input type="checkbox" id="chkBg"> Keep listening in background</label>
-            <span><span class="dot off" id="dotListen"></span>Listening</span>
-            <span><span class="dot off" id="dotSpeak"></span>Speaking</span>
+            <div style="display: block">
+                <button id="btnStart" class="btn">▶️ Start Listening</button>
+                <button id="btnDemoSpeak" class="btn">💡 Demo Speak</button>
+                <button id="btnStopSpeak" class="btn">⏹ Stop Speaking</button>
+                <label><input type="checkbox" id="chkBg"> Keep listening in background</label>
+            </div>
+            <div style="display: block">
+                <label><input type="checkbox" id="chkMd" checked> Render Markdown</label>
+                <label><input type="checkbox" id="chkIdle" checked> Enable idle nudge</label>
+                <label><input type="checkbox" id="chkMute"> Mute AI (store only)</label>
+                <label><input type="checkbox" id="chkStop"> Stop Listening</label>
+            </div>
         </div>
         <div class="status">
-            <span id="stProfile" class="mono"></span>
-            <span id="stUser" class="mono"></span>
-            <span id="stSession" class="mono"></span>
-            <span id="stLang" class="mono"></span>
-            <span id="stFlags" class="mono"></span>
-            <span id="stTime" class="mono"></span>
+            <div style="display: block">
+                <span><span class="dot off" id="dotListen"></span>Listening</span>
+                <span><span class="dot off" id="dotSpeak"></span>Speaking</span>
+            </div>
+            <div style="display: block">
+                <span id="stProfile" class="mono"></span>
+                <span id="stUser" class="mono"></span>
+                <span id="stSession" class="mono"></span>
+                <span id="stLang" class="mono"></span>
+                <span id="stFlags" class="mono"></span>
+                <span id="stTime" class="mono"></span>
+            </div>
         </div>
     </div>
 </div>
@@ -236,6 +245,7 @@
     const chkMd = document.getElementById('chkMd'); // NEW
     const chkMute = document.getElementById('chkMute');
     const chkStop = document.getElementById('chkStop');
+    const chkIdle = document.getElementById('chkIdle');
     const chkBg = document.getElementById('chkBg');
     chkBg.addEventListener('change', () => {
         keepListeningInBackground = chkBg.checked;
@@ -789,7 +799,7 @@
                 now - (lastSpokeAt || 0)
             );
 
-            if (!idleInFlight && silentFor >= settings.idleSec * 1000) {
+            if (chkIdle.checked && !idleInFlight && silentFor >= settings.idleSec * 1000) {
                 idleInFlight = true;
                 idleCooldownUntil = now + settings.idleCooldownSec * 1000;
 
@@ -911,6 +921,14 @@
             idleCooldownUntil = Date.now() + settings.idleSec * 1000; // grace
             startListeningTimers();
             btnStart.textContent = '⏹ Stop Listening';
+        }
+    });
+
+    chkIdle.addEventListener('change', () => {
+        if (!chkIdle.checked) {
+            // disable: clear any pending idle trigger
+            idleInFlight = false;
+            idleCooldownUntil = Date.now() + settings.idleCooldownSec * 1000;
         }
     });
 
