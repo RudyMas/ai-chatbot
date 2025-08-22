@@ -320,6 +320,24 @@
         return text.replace(nameRegex, '').trim();
     }
 
+    function sanitizeForTTS(s) {
+        // Remove emoji grapheme clusters (incl. ZWJ sequences), flags, skin tones
+        return s
+            // ZWJ emoji sequences (👩‍💻, family emojis, etc.)
+            .replace(/\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?)+/gu, ' ')
+            // Standalone pictographs (😀, 🚀, ❤️, etc.)
+            .replace(/\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?/gu, ' ')
+            // Skin tone modifiers
+            .replace(/[\u{1F3FB}-\u{1F3FF}]/gu, ' ')
+            // Regional indicator flags (🇧🇪 etc.)
+            .replace(/[\u{1F1E6}-\u{1F1FF}]{2}/gu, ' ')
+            // Variation selectors & ZWJ that may linger
+            .replace(/[\u200D\uFE0E\uFE0F]/g, ' ')
+            // Compact whitespace
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+    }
+
     function markdownToSpeakable(md) {
         let t = md || '';
         t = stripCodeFences(t);
@@ -333,6 +351,7 @@
         t = stripHtml(t);
         t = normalizeWhitespace(t);
         t = stripAssistantName(t);
+        t = sanitizeForTTS(t);
         return t;
     }
 
