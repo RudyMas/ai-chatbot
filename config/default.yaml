@@ -26,12 +26,12 @@ prompt:
 
 logging:
   dir: "logs"
-  session_prefix: "chat"
+  session_prefix: "default"
   format: "jsonl"
 
 rag:
   enabled: true
-  store_path: "data/rag/store.jsonl"
+  store_path: "data/rag/default_store.jsonl"
   chunk_messages: 4
   summary_max_words: 120
   tags: ["session-summary"]
@@ -40,7 +40,7 @@ rag:
 
 retriever:
   enabled: true
-  store_path: "data/rag/store.jsonl"
+  store_path: "data/rag/default_store.jsonl"
   top_k: 4
   max_note_words: 60
   require_tags: []
@@ -55,7 +55,7 @@ chat:
 # NEW: Audio + Debug
 audio:
   tts:
-    enabled: true
+    enabled: false
     backend: "kokoro"                # "piper" or "kokoro"
     # Setting for Piper
     voice: "en_US-bryce-medium"    # file basename (without .onnx)
@@ -63,14 +63,14 @@ audio:
     sample_rate: 22050
     # Setting for Kokoro
     # Models and voices can be downloaded from: https://github.com/thewh1teagle/kokoro-onnx
-    # Click on "Releases" on the right side to find the download links.
+    # Click on "Releases" on the right side to find the model-files to download.
     kokoro:
       model: models/kokoro-v1.0.fp16-gpu.onnx
       voices: models/voices-v1.0.bin
       default_voice: bm_lewis
       speed: 1.0
       # optional: quantized model works too (smaller/faster)
-      # model: models/kokoro-v1.0-quant.onnx
+      # model: models/kokoro-quant-gpu.onnx
   stt:
     enabled: false
     engine: "faster-whisper"
