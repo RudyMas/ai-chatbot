@@ -8,6 +8,7 @@ import json
 import uuid
 import tempfile
 import subprocess
+import unicodedata
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Body
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, Response
@@ -65,6 +66,16 @@ def _hydrate_audio_flags_from_config():
     state.tts_enabled = bool(tts.get("enabled", False))
     state.stt_enabled = bool(stt.get("enabled", False))
 
+
+def normalize_quotes(s: str | None) -> str:
+    """Map curly/prime apostrophes to ASCII apostrophe after NFKC."""
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKC", s)
+    return (s
+            .replace("\u2019", "'")  # ’ right single quote
+            .replace("\u2018", "'")  # ‘ left single quote
+            .replace("\u2032", "'")) # ′ prime sometimes used as apostrophe
 
 LOG_DIR, STORE, rag_cfg, history_max_messages, LOG_PREFIX = _setup_dirs()
 _hydrate_audio_flags_from_config()
@@ -291,7 +302,9 @@ def chat(inp: ChatIn):
     app_cfg.user = UserConfig(name=user_name)
 
     # Handle /flush commands before any LLM call
-    low = inp.message.strip().lower()
+    raw_user = inp.message or ""
+    norm_user = normalize_quotes(raw_user)
+    low = norm_user.strip().lower()
     if low.startswith("/flush"):
         buf = _get_session_buffer(sess)
         if not buf.turns:
@@ -312,11 +325,11 @@ def chat(inp: ChatIn):
     # --- Listen-only mode: store to buffer (+optional RAG) without LLM ---
     if inp.listen_only:
         logger = _build_logger(sess, user_name)
-        logger.log("user", inp.message, user_name=user_name)
+        logger.log("user", norm_user, user_name=user_name)
 
         # Append to the session buffer (short-term memory)
         buf = _get_session_buffer(sess)
-        user_line = f"{user_name}: {inp.message}"
+        user_line = f"{user_name}: {norm_user}"
         buf.turns.append(("user", user_line))
         buf.count += 1
 
@@ -324,7 +337,7 @@ def chat(inp: ChatIn):
         if rag_cfg.get("enabled", True):
             try:
                 tags = list(dict.fromkeys((inp.remember_tags or []) + ["voice", "viewer"]))
-                entry = RAGStore.make_fact_entry(sess, user_name, inp.message, tags)
+                entry = RAGStore.make_fact_entry(sess, user_name, norm_user, tags)
                 STORE.append(entry)
             except Exception:
                 pass  # non-fatal
@@ -352,14 +365,14 @@ def chat(inp: ChatIn):
     notes: List[str] = []
     if rag_cfg.get("enabled", True):
         retr, top_k, max_note_words, min_score, fallback_recent = _build_retriever(user_name)
-        notes = retr.top_k_notes(inp.message, top_k, max_note_words, min_score=min_score,
+        notes = retr.top_k_notes(norm_user, top_k, max_note_words, min_score=min_score,
                                  fallback_recent=fallback_recent)
 
-    user_line = f"{user_name}: {inp.message}"
+    user_line = f"{user_name}: {norm_user}"
     final_user = _context_block(notes) + user_line
 
     logger = _build_logger(sess, user_name)
-    logger.log("user", inp.message, user_name=user_name)
+    logger.log("user", norm_user, user_name=user_name)
 
     buf = _get_session_buffer(sess)
     buf.turns.append(("user", user_line))
@@ -369,6 +382,7 @@ def chat(inp: ChatIn):
     history_slice = buf.turns[-history_max_messages:] if history_max_messages > 0 else buf.turns
     try:
         answer = generate_chat(history_slice, final_user, app_cfg, str(TEMPLATE_PATH))
+        answer = normalize_quotes(answer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -430,7 +444,7 @@ def speak(
         backend_override: Optional[str] = Query(None),  # <-- NEW
         voice_override: Optional[str] = Query(None),  # <-- NEW
 ):
-    txt = (text_body or text_form or text or "").strip()
+    txt = normalize_quotes((text_body or text_form or text or "").strip())
     if not txt:
         raise HTTPException(status_code=400, detail="Missing 'text' (query, JSON body, or form).")
     if len(txt) > 4000:
