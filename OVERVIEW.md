@@ -34,6 +34,47 @@
 
 ---
 
+## 🗺️ Visual Architecture Diagram
+```mermaid
+flowchart TB
+    subgraph Client["Browser UIs (static HTML/JS)"]
+        Index["index.html (control panel)"]
+        Chat["chat.html (text chat)"]
+        Viewer["viewer.html (voice viewer)"]
+    end
+
+    subgraph API["FastAPI Server (src/server/api.py)"]
+        Routes["/chat • /remember • /memory/* • /profile/* • /speak • /transcribe • /debug/*"]
+        Session["Session buffers + transcript logging"]
+    end
+
+    subgraph Core["Bot Core (src/bot)"]
+        Config["Config + Profiles (config/*.yaml)"]
+        Prompt["Prompt templating (system_prompt.txt)"]
+        RAG["RAG Store + Retriever (JSONL)"]
+    end
+
+    subgraph LLM["LLM Backend"]
+        Ollama["Ollama (/api/chat, /api/generate)"]
+    end
+
+    subgraph Audio["Audio Backends"]
+        TTS["TTS: Kokoro / Piper"]
+        STT["STT: faster-whisper"]
+    end
+
+    Client -->|HTTP fetch| API
+    API --> Config
+    API --> Prompt
+    API --> RAG
+    API --> Ollama
+    API --> TTS
+    API --> STT
+    API --> Session
+```
+
+---
+
 ## 🚀 Future Enhancements (Ideas)
 1. **Backend Flexibility**
    - Add support for LM Studio (API-compatible with OpenAI spec).  
