@@ -29,19 +29,37 @@ class MailPaths:
 @dataclass(slots=True)
 class MailConfig:
     paths: MailPaths
-    chat_endpoint: str = "http://127.0.0.1:8000/chat"
+
+    # Chat / API
+    api_base_url: str = "http://127.0.0.1:8000"
+    active_profile: str = "patricia"
     chat_user: str = "Patricia"
+    chat_timeout_seconds: float = 30.0
+
+    # Onboarding
     onboarding_subject: str = "Thanks for your message"
+
+    # SMTP
     smtp_host: str | None = None
     smtp_port: int = 587
     smtp_username: str | None = None
     smtp_password: str | None = None
     smtp_use_tls: bool = True
     smtp_from_email: str | None = None
+    smtp_from_name: str = "Patricia"
+
+    @property
+    def smtp_enabled(self) -> bool:
+        return bool(
+            self.smtp_host
+            and self.smtp_port
+            and self.smtp_from_email
+        )
 
 
 def ensure_mail_files(paths: MailPaths) -> None:
     paths.base_dir.mkdir(parents=True, exist_ok=True)
+
     for path in (
         paths.whitelist,
         paths.blacklist,

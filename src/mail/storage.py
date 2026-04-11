@@ -13,7 +13,9 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def normalize_email(email: str) -> str:
+def normalize_email(email: str | None) -> str:
+    if not email:
+        return ""
     return email.strip().lower()
 
 
@@ -33,6 +35,7 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
                 continue
             if isinstance(row, dict):
                 records.append(row)
+
     return records
 
 
@@ -53,8 +56,9 @@ def load_email_set(path: Path) -> set[str]:
     emails: set[str] = set()
     for row in read_jsonl(path):
         value = row.get("email")
-        if isinstance(value, str) and value.strip():
-            emails.add(normalize_email(value))
+        normalized = normalize_email(value if isinstance(value, str) else "")
+        if normalized:
+            emails.add(normalized)
     return emails
 
 
@@ -62,23 +66,72 @@ class ProcessedMessageStore:
     def __init__(self, processed_path: Path):
         self.processed_path = processed_path
 
-    def has_message(self, message_id: str) -> bool:
-        if not message_id:
+    def has_message(self, message_id: str | None) -> bool:
+        normalized_message_id = (message_id or "").strip()
+        if not normalized_message_id:
             return False
+
         for row in read_jsonl(self.processed_path):
-            if row.get("message_id") == message_id:
+            row_message_id = row.get("message_id")
+            if isinstance(row_message_id, str) and row_message_id.strip() == normalized_message_id:
                 return True
+
         return False
 
-    def add(self, message_id: str, sender: str, action: MailAction, details: dict[str, Any] | None = None) -> ProcessedEntry:
+    def add(
+        self,
+        message_id: str,
+        sender: str,
+        action: MailAction,
+        details: dict[str, Any] | None = None,
+    ) -> ProcessedEntry:
+        clean_message_id = (message_id or "").strip()
+        if not clean_message_id:
+            raise ValueError("message_id is required")
+
         entry = ProcessedEntry(
-            message_id=message_id,
+            message_id=clean_message_id,
             sender=normalize_email(sender),
             action=action,
             created_at=utc_now_iso(),
             details=details or {},
         )
+
         payload = asdict(entry)
         payload["action"] = entry.action.value
         append_jsonl(self.processed_path, payload)
+
         return entry
+
+    def list_entries(self) -> list[ProcessedEntry]:
+        entries: list[ProcessedEntry] = []
+
+        for row in read_jsonl(self.processed_path):
+            message_id = row.get("message_id")
+            sender = row.get("sender")
+            action = row.get("action")
+            created_at = row.get("created_at")
+            details = row.get("details") or {}
+
+            if not all(isinstance(v, str) for v in (message_id, sender, action, created_at)):
+                continue
+
+            try:
+                action_enum = MailAction(action)
+            except ValueError:
+                continue
+
+            if not isinstance(details, dict):
+                details = {}
+
+            entries.append(
+                ProcessedEntry(
+                    message_id=message_id.strip(),
+                    sender=normalize_email(sender),
+                    action=action_enum,
+                    created_at=created_at,
+                    details=details,
+                )
+            )
+
+        return entries

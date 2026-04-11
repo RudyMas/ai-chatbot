@@ -11,14 +11,28 @@ from mail.storage import ProcessedMessageStore, append_jsonl, normalize_email, u
 from mail.templates import onboarding_body, onboarding_subject
 
 
+def build_reply_subject(subject: str | None) -> str:
+    if not subject:
+        return "Reply from Patricia"
+
+    clean = subject.strip()
+    if not clean:
+        return "Reply from Patricia"
+
+    if clean.lower().startswith("re:"):
+        return clean
+
+    return f"Re: {clean}"
+
+
 class MailProcessor:
     def __init__(
-        self,
-        config: MailConfig,
-        contact_manager: ContactManager,
-        processed_storage: ProcessedMessageStore,
-        chat_client: ChatClient,
-        smtp_client: SMTPClient,
+            self,
+            config: MailConfig,
+            contact_manager: ContactManager,
+            processed_storage: ProcessedMessageStore,
+            chat_client: ChatClient,
+            smtp_client: SMTPClient,
     ):
         self.config = config
         self.contact_manager = contact_manager
@@ -28,19 +42,25 @@ class MailProcessor:
 
     def process_message(self, message: IncomingEmail) -> ProcessingResult:
         sender = normalize_email(message.sender)
+        message_id = self._resolve_message_id(message, sender)
 
         try:
-            if self.processed_storage.has_message(message.message_id):
+            if self.processed_storage.has_message(message_id):
                 return ProcessingResult(
                     sender=sender,
                     action=MailAction.ALREADY_PROCESSED,
                     email_sent=False,
-                    details={"message_id": message.message_id},
+                    details={"message_id": message_id},
                 )
 
             if self.contact_manager.is_blacklisted(sender):
-                self.processed_storage.add(message.message_id, sender, MailAction.IGNORED_BLACKLIST)
-                return ProcessingResult(sender=sender, action=MailAction.IGNORED_BLACKLIST, email_sent=False)
+                self.processed_storage.add(message_id, sender, MailAction.IGNORED_BLACKLIST)
+                return ProcessingResult(
+                    sender=sender,
+                    action=MailAction.IGNORED_BLACKLIST,
+                    email_sent=False,
+                    details={"message_id": message_id},
+                )
 
             if self.contact_manager.is_whitelisted(sender):
                 reply_text = self.chat_client.build_reply(
@@ -48,46 +68,114 @@ class MailProcessor:
                     subject=message.subject,
                     body=message.text_body,
                 )
+
+                reply_subject = build_reply_subject(message.subject)
                 sent = self.smtp_client.send_plain_text(
                     to_email=sender,
-                    subject=f"Re: {message.subject}" if message.subject else "Reply from Patricia",
+                    subject=reply_subject,
                     body=reply_text,
                 )
-                details = {"message_id": message.message_id, "smtp_enabled": self.smtp_client.enabled}
-                self._log_outbound(sender=sender, subject=message.subject, body=reply_text, kind="whitelist_reply", sent=sent)
-                self.processed_storage.add(message.message_id, sender, MailAction.REPLIED_WHITELIST, details=details)
-                return ProcessingResult(sender=sender, action=MailAction.REPLIED_WHITELIST, email_sent=sent, details=details)
+
+                details = {
+                    "message_id": message_id,
+                    "smtp_enabled": self.smtp_client.enabled,
+                    "reply_subject": reply_subject,
+                }
+
+                self._log_outbound(
+                    sender=sender,
+                    subject=reply_subject,
+                    body=reply_text,
+                    kind="whitelist_reply",
+                    sent=sent,
+                )
+                self.processed_storage.add(
+                    message_id,
+                    sender,
+                    MailAction.REPLIED_WHITELIST,
+                    details=details,
+                )
+
+                return ProcessingResult(
+                    sender=sender,
+                    action=MailAction.REPLIED_WHITELIST,
+                    email_sent=sent,
+                    details=details,
+                )
 
             if self.contact_manager.is_new(sender):
-                self.processed_storage.add(message.message_id, sender, MailAction.ALREADY_NEW)
+                self.processed_storage.add(message_id, sender, MailAction.ALREADY_NEW)
                 return ProcessingResult(
                     sender=sender,
                     action=MailAction.ALREADY_NEW,
                     email_sent=False,
-                    details={"reason": "sender already queued for review"},
+                    details={
+                        "message_id": message_id,
+                        "reason": "sender already queued for review",
+                    },
                 )
 
-            self.contact_manager.add_new(sender, note="auto-added from inbound email")
+            new_entry = self.contact_manager.add_new(sender, note="auto-added from inbound email")
             subject = onboarding_subject(self.config.onboarding_subject)
             body = onboarding_body(sender)
-            sent = self.smtp_client.send_plain_text(to_email=sender, subject=subject, body=body)
-            self._log_outbound(sender=sender, subject=subject, body=body, kind="onboarding", sent=sent)
+            sent = self.smtp_client.send_plain_text(
+                to_email=sender,
+                subject=subject,
+                body=body,
+            )
+
+            self._log_outbound(
+                sender=sender,
+                subject=subject,
+                body=body,
+                kind="onboarding",
+                sent=sent,
+            )
+
             self.processed_storage.add(
-                message.message_id,
+                message_id,
                 sender,
                 MailAction.ADDED_TO_NEW,
-                details={"onboarding_sent": sent, "smtp_enabled": self.smtp_client.enabled},
+                details={
+                    "message_id": message_id,
+                    "onboarding_sent": sent,
+                    "smtp_enabled": self.smtp_client.enabled,
+                    "added_to": "new",
+                    "created_at": new_entry.created_at,
+                },
             )
+
             return ProcessingResult(
                 sender=sender,
                 action=MailAction.ADDED_TO_NEW,
                 email_sent=sent,
-                details={"added_to": "new"},
+                details={
+                    "message_id": message_id,
+                    "added_to": "new",
+                    "created_at": new_entry.created_at,
+                },
             )
+
         except Exception as exc:
-            details = {"error": str(exc), "message_id": message.message_id}
-            self.processed_storage.add(message.message_id, sender, MailAction.ERROR, details=details)
-            return ProcessingResult(sender=sender, action=MailAction.ERROR, email_sent=False, details=details)
+            details = {
+                "error": str(exc),
+                "message_id": message_id,
+            }
+            self.processed_storage.add(message_id, sender, MailAction.ERROR, details=details)
+            return ProcessingResult(
+                sender=sender,
+                action=MailAction.ERROR,
+                email_sent=False,
+                details=details,
+            )
+
+    def _resolve_message_id(self, message: IncomingEmail, sender: str) -> str:
+        raw = (message.message_id or "").strip()
+        if raw:
+            return raw
+
+        subject = (message.subject or "").strip()
+        return f"fallback:{sender}:{subject}:{utc_now_iso()}"
 
     def _log_outbound(self, sender: str, subject: str, body: str, kind: str, sent: bool) -> None:
         payload: dict[str, Any] = {
