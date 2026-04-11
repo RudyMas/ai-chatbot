@@ -11,13 +11,15 @@ from mail.storage import ProcessedMessageStore, append_jsonl, normalize_email, u
 from mail.templates import onboarding_body, onboarding_subject
 
 
-def build_reply_subject(subject: str | None) -> str:
+def build_reply_subject(subject: str | None, fallback_name: str) -> str:
+    fallback = f"Reply from {fallback_name}".strip()
+
     if not subject:
-        return "Reply from Patricia"
+        return fallback
 
     clean = subject.strip()
     if not clean:
-        return "Reply from Patricia"
+        return fallback
 
     if clean.lower().startswith("re:"):
         return clean
@@ -27,12 +29,12 @@ def build_reply_subject(subject: str | None) -> str:
 
 class MailProcessor:
     def __init__(
-            self,
-            config: MailConfig,
-            contact_manager: ContactManager,
-            processed_storage: ProcessedMessageStore,
-            chat_client: ChatClient,
-            smtp_client: SMTPClient,
+        self,
+        config: MailConfig,
+        contact_manager: ContactManager,
+        processed_storage: ProcessedMessageStore,
+        chat_client: ChatClient,
+        smtp_client: SMTPClient,
     ):
         self.config = config
         self.contact_manager = contact_manager
@@ -69,7 +71,9 @@ class MailProcessor:
                     body=message.text_body,
                 )
 
-                reply_subject = build_reply_subject(message.subject)
+                fallback_name = self.config.smtp.from_name or self.config.behavior.chat_user
+                reply_subject = build_reply_subject(message.subject, fallback_name)
+
                 sent = self.smtp_client.send_plain_text(
                     to_email=sender,
                     subject=reply_subject,
@@ -116,8 +120,10 @@ class MailProcessor:
                 )
 
             new_entry = self.contact_manager.add_new(sender, note="auto-added from inbound email")
-            subject = onboarding_subject(self.config.onboarding_subject)
-            body = onboarding_body(sender)
+            subject = onboarding_subject(self.config.behavior.onboarding_subject)
+            assistant_name = self.config.smtp.from_name or self.config.behavior.chat_user
+            body = onboarding_body(sender, assistant_name)
+
             sent = self.smtp_client.send_plain_text(
                 to_email=sender,
                 subject=subject,

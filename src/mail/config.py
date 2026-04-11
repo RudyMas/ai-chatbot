@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
+from typing import Any
+
+from bot.profiles import load_profile
 
 
 @dataclass(slots=True)
@@ -27,34 +31,49 @@ class MailPaths:
 
 
 @dataclass(slots=True)
-class MailConfig:
-    paths: MailPaths
+class IMAPSettings:
+    host: str
+    port: int = 993
+    username: str | None = None
+    password: str | None = None
+    mailbox: str = "inbox"
+    use_ssl: bool = True
+    poll_interval_seconds: int = 60
 
-    # Chat / API
-    api_base_url: str = "http://127.0.0.1:8000"
-    active_profile: str = "patricia"
-    chat_user: str = "Patricia"
-    chat_timeout_seconds: float = 30.0
 
-    # Onboarding
-    onboarding_subject: str = "Thanks for your message"
-
-    # SMTP
-    smtp_host: str | None = None
-    smtp_port: int = 587
-    smtp_username: str | None = None
-    smtp_password: str | None = None
-    smtp_use_tls: bool = True
-    smtp_from_email: str | None = None
-    smtp_from_name: str = "Patricia"
+@dataclass(slots=True)
+class SMTPSettings:
+    host: str | None = None
+    port: int = 465
+    username: str | None = None
+    password: str | None = None
+    use_tls: bool = True
+    use_ssl: bool = True
+    from_email: str | None = None
+    from_name: str = "AI Jarvis"
 
     @property
-    def smtp_enabled(self) -> bool:
-        return bool(
-            self.smtp_host
-            and self.smtp_port
-            and self.smtp_from_email
-        )
+    def enabled(self) -> bool:
+        return bool(self.host and self.from_email)
+
+
+@dataclass(slots=True)
+class MailBehaviorSettings:
+    api_base_url: str = "http://127.0.0.1:8000"
+    active_profile: str = "default"
+    chat_user: str = "Jarvis"
+    chat_timeout_seconds: float = 30.0
+    onboarding_subject: str = "Thanks for your message"
+    mark_seen_after_processing: bool = True
+
+
+@dataclass(slots=True)
+class MailConfig:
+    profile_name: str
+    paths: MailPaths
+    imap: IMAPSettings
+    smtp: SMTPSettings
+    behavior: MailBehaviorSettings
 
 
 def ensure_mail_files(paths: MailPaths) -> None:
@@ -69,3 +88,110 @@ def ensure_mail_files(paths: MailPaths) -> None:
     ):
         if not path.exists():
             path.touch()
+
+
+def load_mail_config(profile_name: str) -> MailConfig:
+    _, raw_cfg, _ = load_profile(profile_name)
+
+    email_cfg = raw_cfg.get("email") or {}
+    if not isinstance(email_cfg, dict):
+        raise ValueError(f"Profile '{profile_name}' has invalid email configuration.")
+
+    enabled = bool(email_cfg.get("enabled", False))
+    if not enabled:
+        raise ValueError(f"Email is not enabled for profile '{profile_name}'.")
+
+    files_cfg = email_cfg.get("files") or {}
+    if not isinstance(files_cfg, dict):
+        files_cfg = {}
+
+    base_dir = files_cfg.get("base_dir") or f"data/email/{profile_name}"
+    paths = MailPaths.from_base_dir(base_dir)
+
+    imap_cfg = email_cfg.get("imap") or {}
+    if not isinstance(imap_cfg, dict):
+        raise ValueError(f"Profile '{profile_name}' has invalid email.imap configuration.")
+
+    smtp_cfg = email_cfg.get("smtp") or {}
+    if not isinstance(smtp_cfg, dict):
+        raise ValueError(f"Profile '{profile_name}' has invalid email.smtp configuration.")
+
+    behavior_cfg = email_cfg.get("behavior") or {}
+    if not isinstance(behavior_cfg, dict):
+        raise ValueError(f"Profile '{profile_name}' has invalid email.behavior configuration.")
+
+    imap_host = _require_string(imap_cfg, "host", f"profile '{profile_name}' email.imap.host")
+    imap_password = _resolve_secret(
+        direct_value=imap_cfg.get("password"),
+        env_name=imap_cfg.get("password_env"),
+    )
+
+    smtp_password = _resolve_secret(
+        direct_value=smtp_cfg.get("password"),
+        env_name=smtp_cfg.get("password_env"),
+    )
+
+    imap = IMAPSettings(
+        host=imap_host,
+        port=int(imap_cfg.get("port", 993)),
+        username=_optional_string(imap_cfg.get("username")),
+        password=imap_password,
+        mailbox=str(imap_cfg.get("mailbox", "inbox")),
+        use_ssl=bool(imap_cfg.get("use_ssl", True)),
+        poll_interval_seconds=int(imap_cfg.get("poll_interval_seconds", 60)),
+    )
+
+    smtp = SMTPSettings(
+        host=_optional_string(smtp_cfg.get("host")),
+        port=int(smtp_cfg.get("port", 465)),
+        username=_optional_string(smtp_cfg.get("username")),
+        password=smtp_password,
+        use_tls=bool(smtp_cfg.get("use_tls", True)),
+        use_ssl=bool(smtp_cfg.get("use_ssl", False)),
+        from_email=_optional_string(smtp_cfg.get("from_email")),
+        from_name=str(smtp_cfg.get("from_name", profile_name.capitalize())),
+    )
+
+    behavior = MailBehaviorSettings(
+        api_base_url=str(behavior_cfg.get("api_base_url", "http://127.0.0.1:8000")),
+        active_profile=str(behavior_cfg.get("active_profile", profile_name)),
+        chat_user=str(behavior_cfg.get("chat_user", profile_name.capitalize())),
+        chat_timeout_seconds=float(behavior_cfg.get("chat_timeout_seconds", 30.0)),
+        onboarding_subject=str(behavior_cfg.get("onboarding_subject", "Thanks for your message")),
+        mark_seen_after_processing=bool(behavior_cfg.get("mark_seen_after_processing", True)),
+    )
+
+    return MailConfig(
+        profile_name=profile_name,
+        paths=paths,
+        imap=imap,
+        smtp=smtp,
+        behavior=behavior,
+    )
+
+
+def _resolve_secret(direct_value: Any, env_name: Any) -> str | None:
+    direct = _optional_string(direct_value)
+    if direct:
+        return direct
+
+    env = _optional_string(env_name)
+    if env:
+        return os.getenv(env)
+
+    return None
+
+
+def _optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _require_string(section: dict[str, Any], key: str, label: str) -> str:
+    value = section.get(key)
+    text = _optional_string(value)
+    if not text:
+        raise ValueError(f"Missing required {label}.")
+    return text

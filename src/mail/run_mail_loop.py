@@ -1,43 +1,15 @@
 from __future__ import annotations
 
+import argparse
 import time
-from pathlib import Path
 
 from mail.chat_client import ChatClient
-from mail.config import MailConfig, MailPaths, ensure_mail_files
+from mail.config import MailConfig, ensure_mail_files, load_mail_config
 from mail.contacts import ContactManager
 from mail.imap_client import IMAPClient
 from mail.mail_processor import MailProcessor
 from mail.smtp_client import SMTPClient
 from mail.storage import ProcessedMessageStore
-
-
-POLL_INTERVAL_SECONDS = 60
-
-
-def build_config() -> MailConfig:
-    """
-    Version 1:
-    keep config simple and explicit.
-    You can replace this later with YAML/env loading.
-    """
-    paths = MailPaths.from_base_dir(Path("data/email"))
-
-    return MailConfig(
-        paths=paths,
-        api_base_url="http://127.0.0.1:8000",
-        active_profile="patricia",
-        chat_user="Patricia",
-        chat_timeout_seconds=30.0,
-        onboarding_subject="Thanks for your message",
-        smtp_host=None,
-        smtp_port=587,
-        smtp_username=None,
-        smtp_password=None,
-        smtp_use_tls=True,
-        smtp_from_email=None,
-        smtp_from_name="Patricia",
-    )
 
 
 def build_processor(config: MailConfig) -> MailProcessor:
@@ -47,21 +19,21 @@ def build_processor(config: MailConfig) -> MailProcessor:
     processed_storage = ProcessedMessageStore(config.paths.processed)
 
     chat_client = ChatClient(
-        api_base_url=config.api_base_url,
-        profile=config.active_profile,
-        user_name=config.chat_user,
-        timeout_seconds=config.chat_timeout_seconds,
+        api_base_url=config.behavior.api_base_url,
+        profile=config.behavior.active_profile,
+        user_name=config.behavior.chat_user,
+        timeout_seconds=config.behavior.chat_timeout_seconds,
     )
 
     smtp_client = SMTPClient(
-        host=config.smtp_host,
-        port=config.smtp_port,
-        username=config.smtp_username,
-        password=config.smtp_password,
-        use_tls=config.smtp_use_tls,
-        use_ssl=False,
-        from_email=config.smtp_from_email,
-        from_name=config.smtp_from_name,
+        host=config.smtp.host,
+        port=config.smtp.port,
+        username=config.smtp.username,
+        password=config.smtp.password,
+        use_tls=config.smtp.use_tls,
+        use_ssl=config.smtp.use_ssl,
+        from_email=config.smtp.from_email,
+        from_name=config.smtp.from_name,
     )
 
     return MailProcessor(
@@ -73,27 +45,28 @@ def build_processor(config: MailConfig) -> MailProcessor:
     )
 
 
-def build_imap_client() -> IMAPClient:
-    """
-    Replace these values with your real IMAP settings.
-    Later this can be moved into MailConfig too.
-    """
+def build_imap_client(config: MailConfig) -> IMAPClient:
     return IMAPClient(
-        host="imap.example.com",
-        port=993,
-        username="patricia@example.com",
-        password="replace-me",
-        mailbox="INBOX",
-        use_ssl=True,
+        host=config.imap.host,
+        port=config.imap.port,
+        username=config.imap.username,
+        password=config.imap.password,
+        mailbox=config.imap.mailbox,
+        use_ssl=config.imap.use_ssl,
     )
 
 
 def main() -> None:
-    config = build_config()
+    args = parse_args()
+    config = load_mail_config(args.profile)
     processor = build_processor(config)
-    imap_client = build_imap_client()
+    imap_client = build_imap_client(config)
 
-    print("[MAIL] Patricia mail worker started.")
+    print(f"[MAIL] {config.profile_name} mail worker started.")
+    print(f"[MAIL] mailbox={config.imap.mailbox} poll_interval={config.imap.poll_interval_seconds}s")
+    print(f"[MAIL] data_dir={config.paths.base_dir}")
+    print(f"[MAIL] api_base_url={config.behavior.api_base_url}")
+    print(f"[MAIL] active_profile={config.behavior.active_profile}")
 
     while True:
         try:
@@ -107,18 +80,27 @@ def main() -> None:
 
                 print(
                     f"[MAIL] sender={result.sender!r} "
-                    f"action={result.action} "
+                    f"action={result.action.value} "
                     f"email_sent={result.email_sent}"
                 )
 
-                # Mark seen only after processing attempt.
-                # Because errors are stored as processed too, this avoids endless loops.
-                imap_client.mark_seen(imap_message_id)
+                if config.behavior.mark_seen_after_processing:
+                    imap_client.mark_seen(imap_message_id)
 
         except Exception as exc:
             print(f"[MAIL ERROR] {exc}")
 
-        time.sleep(POLL_INTERVAL_SECONDS)
+        time.sleep(config.imap.poll_interval_seconds)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the profile-based AI mail worker.")
+    parser.add_argument(
+        "--profile",
+        required=True,
+        help="default",
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":

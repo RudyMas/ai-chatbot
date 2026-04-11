@@ -77,5 +77,37 @@ audio:
     model_size: "distil-large-v3"  # tiny/base/small/medium/large-v3/distil-large-v3
     device: "cuda"                 # "cpu" or "cuda" for GPU
 
+email:
+  enabled: true
+
+  imap:
+    host: "imap.one.com"
+    port: 993
+    username: "jarvis@young-ai.be"
+    password: "*****"
+    mailbox: "INBOX"
+    use_ssl: true
+    poll_interval_seconds: 60
+
+  smtp:
+    host: "send.one.com"
+    port: 465
+    username: "jarvis@young-ai.be"
+    password: "*****"
+    use_tls: false
+    use_ssl: true
+    from_email: "jarvis@young-ai.be"
+    from_name: "AI Jarvis"
+
+  behavior:
+    onboarding_subject: "Thanks for your message"
+    api_base_url: "http://127.0.0.1:8000"
+    active_profile: "default"
+    chat_user: "Jarvis"
+    chat_timeout_seconds: 30.0
+
+  files:
+    base_dir: "data/email/jarvis"
+
 debug:
   enable_debug_endpoints: true
