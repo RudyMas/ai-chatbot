@@ -104,6 +104,25 @@
             gap: 8px;
             flex-wrap: wrap;
         }
+
+        .note-editor {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+        }
+
+        .note-editor input[type="text"] {
+            min-width: 280px;
+            flex: 1 1 280px;
+        }
+
+        .note-actions {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+        }
     </style>
 </head>
 <body>
@@ -252,11 +271,33 @@
         if (item.onboarding_sent_at) lines.push(`<div><strong>Onboarding sent:</strong> ${escapeHtml(item.onboarding_sent_at)}</div>`);
         if (item.last_pending_reply_at) lines.push(`<div><strong>Pending reply sent:</strong> ${escapeHtml(item.last_pending_reply_at)}</div>`);
         if (item.source) lines.push(`<div><strong>Source:</strong> ${escapeHtml(item.source)}</div>`);
-        if (item.note) lines.push(`<div><strong>Note:</strong> ${escapeHtml(item.note)}</div>`);
+        if (item.note) {
+            lines.push(`<div><strong>Note:</strong> <span class="note-text">${escapeHtml(item.note)}</span></div>`);
+        } else {
+            lines.push(`<div><strong>Note:</strong> <span class="muted">No note</span></div>`);
+        }
 
-        return lines.length
-            ? `<div class="meta-block">${lines.join('')}</div>`
-            : `<span class="muted">No metadata</span>`;
+        const emailEncoded = encodeURIComponent(item.email);
+        const noteValue = escapeHtml(item.note || "");
+
+        lines.push(`
+        <div class="note-editor">
+            <input
+                type="text"
+                value="${noteValue}"
+                placeholder="Add or edit note..."
+                data-note-input="${emailEncoded}"
+            />
+            <button
+                type="button"
+                data-action="save-note"
+                data-email="${emailEncoded}"
+                data-status="${escapeHtml(item.status)}"
+            >Save note</button>
+        </div>
+    `);
+
+        return `<div class="meta-block">${lines.join('')}</div>`;
     }
 
     function renderTable() {
@@ -358,6 +399,27 @@
                     });
                     await loadContacts();
                     setStatus(`Removed ${email} from ${from_status}.`);
+                } catch (err) {
+                    setStatus(`Error: ${err.message}`);
+                }
+            });
+        });
+
+        document.querySelectorAll('[data-action="save-note"]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const email = decodeURIComponent(btn.dataset.email);
+                const status = btn.dataset.status;
+                const input = document.querySelector(`[data-note-input="${btn.dataset.email}"]`);
+                const note = input ? input.value : '';
+
+                try {
+                    setStatus(`Saving note for ${email}...`);
+                    await api(`/admin/api/${encodeURIComponent(profileSelect.value)}/contacts/note`, {
+                        method: 'POST',
+                        body: JSON.stringify({email, status, note})
+                    });
+                    await loadContacts();
+                    setStatus(`Saved note for ${email}.`);
                 } catch (err) {
                     setStatus(`Error: ${err.message}`);
                 }

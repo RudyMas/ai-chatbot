@@ -24,6 +24,10 @@ class RemoveContactIn(BaseModel):
     email: str
     from_status: ContactStatus
 
+class UpdateNoteIn(BaseModel):
+    email: str
+    status: ContactStatus
+    note: str | None = None
 
 def register_admin_routes(app: FastAPI, root_dir: Path) -> None:
     web_dir = root_dir / "web"
@@ -105,6 +109,26 @@ def register_admin_routes(app: FastAPI, root_dir: Path) -> None:
             "profile": profile_name,
             "email": email,
             "from_status": payload.from_status,
+        }
+
+    @app.post("/admin/api/{profile_name}/contacts/note")
+    def admin_update_note(profile_name: str, payload: UpdateNoteIn) -> dict[str, Any]:
+        cfg = _get_mail_config(profile_name)
+
+        email = normalize_email(payload.email)
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+
+        updated = _update_contact_note(cfg, email, payload.status, payload.note)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Contact not found")
+
+        return {
+            "ok": True,
+            "profile": profile_name,
+            "email": email,
+            "status": payload.status,
+            "note": payload.note,
         }
 
     @app.get("/admin/api/{profile_name}/debug")
@@ -257,4 +281,32 @@ def _remove_contact(
         return False
 
     write_jsonl(path, kept_rows)
+    return True
+
+def _update_contact_note(
+    cfg: MailConfig,
+    email: str,
+    status: ContactStatus,
+    note: str | None,
+) -> bool:
+    path = _path_for_status(cfg, status)
+    rows = read_jsonl(path)
+
+    updated = False
+    clean_note = (note or "").strip() or None
+
+    for row in rows:
+        row_email = normalize_email(str(row.get("email") or ""))
+        if row_email != email:
+            continue
+
+        row["note"] = clean_note
+        row["updated_at"] = utc_now_iso()
+        updated = True
+        break
+
+    if not updated:
+        return False
+
+    write_jsonl(path, rows)
     return True
