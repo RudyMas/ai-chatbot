@@ -46,6 +46,7 @@ class MailProcessor:
         sender = normalize_email(message.sender)
         message_id = self._resolve_message_id(message, sender)
         assistant_name = self.config.smtp.from_name or self.config.behavior.chat_user
+        signature = self.config.behavior.signature
 
         try:
             if self.processed_storage.has_message(message_id):
@@ -112,11 +113,12 @@ class MailProcessor:
                     sender=sender,
                     message_id=message_id,
                     assistant_name=assistant_name,
+                    signature=signature,
                 )
 
             new_entry = self.contact_manager.add_new(sender, note="auto-added from inbound email")
             subject = onboarding_subject(self.config.behavior.onboarding_subject)
-            body = onboarding_body(sender, assistant_name)
+            body = onboarding_body(sender, assistant_name, signature)
 
             sent = self.smtp_client.send_plain_text(
                 to_email=sender,
@@ -177,6 +179,7 @@ class MailProcessor:
         sender: str,
         message_id: str,
         assistant_name: str,
+        signature: str | None,
     ) -> ProcessingResult:
         if not self.config.behavior.send_pending_reply:
             self.processed_storage.add(message_id, sender, MailAction.ALREADY_NEW)
@@ -208,7 +211,7 @@ class MailProcessor:
             )
 
         subject = onboarding_subject(self.config.behavior.onboarding_subject)
-        body = pending_approval_body(sender, assistant_name)
+        body = pending_approval_body(sender, assistant_name, signature)
 
         sent = self.smtp_client.send_plain_text(
             to_email=sender,

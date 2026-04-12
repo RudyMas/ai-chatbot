@@ -67,6 +67,7 @@ class MailBehaviorSettings:
     mark_seen_after_processing: bool = True
     send_pending_reply: bool = False
     pending_reply_cooldown_hours: int = 24
+    signature: str | None = None
 
 
 @dataclass(slots=True)
@@ -162,6 +163,7 @@ def load_mail_config(profile_name: str) -> MailConfig:
         mark_seen_after_processing=bool(behavior_cfg.get("mark_seen_after_processing", True)),
         send_pending_reply=bool(behavior_cfg.get("send_pending_reply", False)),
         pending_reply_cooldown_hours=int(behavior_cfg.get("pending_reply_cooldown_hours", 24)),
+        signature=_optional_string(behavior_cfg.get("signature")),
     )
 
     return MailConfig(
