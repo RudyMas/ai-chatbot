@@ -8,7 +8,7 @@ from mail.contacts import ContactManager
 from mail.models import IncomingEmail, MailAction, ProcessingResult
 from mail.smtp_client import SMTPClient
 from mail.storage import ProcessedMessageStore, append_jsonl, normalize_email, utc_now_iso
-from mail.templates import onboarding_body, onboarding_subject
+from mail.templates import onboarding_body, onboarding_subject, pending_approval_body
 
 
 def build_reply_subject(subject: str | None, fallback_name: str) -> str:
@@ -45,6 +45,7 @@ class MailProcessor:
     def process_message(self, message: IncomingEmail) -> ProcessingResult:
         sender = normalize_email(message.sender)
         message_id = self._resolve_message_id(message, sender)
+        assistant_name = self.config.smtp.from_name or self.config.behavior.chat_user
 
         try:
             if self.processed_storage.has_message(message_id):
@@ -71,8 +72,7 @@ class MailProcessor:
                     body=message.text_body,
                 )
 
-                fallback_name = self.config.smtp.from_name or self.config.behavior.chat_user
-                reply_subject = build_reply_subject(message.subject, fallback_name)
+                reply_subject = build_reply_subject(message.subject, assistant_name)
 
                 sent = self.smtp_client.send_plain_text(
                     to_email=sender,
@@ -108,20 +108,14 @@ class MailProcessor:
                 )
 
             if self.contact_manager.is_new(sender):
-                self.processed_storage.add(message_id, sender, MailAction.ALREADY_NEW)
-                return ProcessingResult(
+                return self._handle_existing_new_sender(
                     sender=sender,
-                    action=MailAction.ALREADY_NEW,
-                    email_sent=False,
-                    details={
-                        "message_id": message_id,
-                        "reason": "sender already queued for review",
-                    },
+                    message_id=message_id,
+                    assistant_name=assistant_name,
                 )
 
             new_entry = self.contact_manager.add_new(sender, note="auto-added from inbound email")
             subject = onboarding_subject(self.config.behavior.onboarding_subject)
-            assistant_name = self.config.smtp.from_name or self.config.behavior.chat_user
             body = onboarding_body(sender, assistant_name)
 
             sent = self.smtp_client.send_plain_text(
@@ -137,6 +131,9 @@ class MailProcessor:
                 kind="onboarding",
                 sent=sent,
             )
+
+            if sent:
+                self.contact_manager.mark_onboarding_sent(sender)
 
             self.processed_storage.add(
                 message_id,
@@ -174,6 +171,83 @@ class MailProcessor:
                 email_sent=False,
                 details=details,
             )
+
+    def _handle_existing_new_sender(
+        self,
+        sender: str,
+        message_id: str,
+        assistant_name: str,
+    ) -> ProcessingResult:
+        if not self.config.behavior.send_pending_reply:
+            self.processed_storage.add(message_id, sender, MailAction.ALREADY_NEW)
+            return ProcessingResult(
+                sender=sender,
+                action=MailAction.ALREADY_NEW,
+                email_sent=False,
+                details={
+                    "message_id": message_id,
+                    "reason": "sender already queued for review",
+                    "pending_reply_enabled": False,
+                },
+            )
+
+        cooldown_hours = self.config.behavior.pending_reply_cooldown_hours
+        should_send = self.contact_manager.should_send_pending_reply(sender, cooldown_hours)
+
+        if not should_send:
+            self.processed_storage.add(message_id, sender, MailAction.ALREADY_NEW)
+            return ProcessingResult(
+                sender=sender,
+                action=MailAction.ALREADY_NEW,
+                email_sent=False,
+                details={
+                    "message_id": message_id,
+                    "reason": "pending approval reply cooldown active",
+                    "cooldown_hours": cooldown_hours,
+                },
+            )
+
+        subject = onboarding_subject(self.config.behavior.onboarding_subject)
+        body = pending_approval_body(sender, assistant_name)
+
+        sent = self.smtp_client.send_plain_text(
+            to_email=sender,
+            subject=subject,
+            body=body,
+        )
+
+        self._log_outbound(
+            sender=sender,
+            subject=subject,
+            body=body,
+            kind="pending_approval",
+            sent=sent,
+        )
+
+        if sent:
+            self.contact_manager.mark_pending_reply_sent(sender)
+
+        self.processed_storage.add(
+            message_id,
+            sender,
+            MailAction.PENDING_REPLY_SENT,
+            details={
+                "message_id": message_id,
+                "pending_reply_sent": sent,
+                "smtp_enabled": self.smtp_client.enabled,
+                "cooldown_hours": cooldown_hours,
+            },
+        )
+
+        return ProcessingResult(
+            sender=sender,
+            action=MailAction.PENDING_REPLY_SENT,
+            email_sent=sent,
+            details={
+                "message_id": message_id,
+                "cooldown_hours": cooldown_hours,
+            },
+        )
 
     def _resolve_message_id(self, message: IncomingEmail, sender: str) -> str:
         raw = (message.message_id or "").strip()

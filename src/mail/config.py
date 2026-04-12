@@ -36,7 +36,7 @@ class IMAPSettings:
     port: int = 993
     username: str | None = None
     password: str | None = None
-    mailbox: str = "inbox"
+    mailbox: str = "INBOX"
     use_ssl: bool = True
     poll_interval_seconds: int = 60
 
@@ -44,13 +44,13 @@ class IMAPSettings:
 @dataclass(slots=True)
 class SMTPSettings:
     host: str | None = None
-    port: int = 465
+    port: int = 587
     username: str | None = None
     password: str | None = None
     use_tls: bool = True
-    use_ssl: bool = True
+    use_ssl: bool = False
     from_email: str | None = None
-    from_name: str = "AI Jarvis"
+    from_name: str = "Assistant"
 
     @property
     def enabled(self) -> bool:
@@ -61,10 +61,12 @@ class SMTPSettings:
 class MailBehaviorSettings:
     api_base_url: str = "http://127.0.0.1:8000"
     active_profile: str = "default"
-    chat_user: str = "Jarvis"
+    chat_user: str = "Assistant"
     chat_timeout_seconds: float = 30.0
     onboarding_subject: str = "Thanks for your message"
     mark_seen_after_processing: bool = True
+    send_pending_reply: bool = False
+    pending_reply_cooldown_hours: int = 24
 
 
 @dataclass(slots=True)
@@ -125,7 +127,6 @@ def load_mail_config(profile_name: str) -> MailConfig:
         direct_value=imap_cfg.get("password"),
         env_name=imap_cfg.get("password_env"),
     )
-
     smtp_password = _resolve_secret(
         direct_value=smtp_cfg.get("password"),
         env_name=smtp_cfg.get("password_env"),
@@ -136,14 +137,14 @@ def load_mail_config(profile_name: str) -> MailConfig:
         port=int(imap_cfg.get("port", 993)),
         username=_optional_string(imap_cfg.get("username")),
         password=imap_password,
-        mailbox=str(imap_cfg.get("mailbox", "inbox")),
+        mailbox=str(imap_cfg.get("mailbox", "INBOX")),
         use_ssl=bool(imap_cfg.get("use_ssl", True)),
         poll_interval_seconds=int(imap_cfg.get("poll_interval_seconds", 60)),
     )
 
     smtp = SMTPSettings(
         host=_optional_string(smtp_cfg.get("host")),
-        port=int(smtp_cfg.get("port", 465)),
+        port=int(smtp_cfg.get("port", 587)),
         username=_optional_string(smtp_cfg.get("username")),
         password=smtp_password,
         use_tls=bool(smtp_cfg.get("use_tls", True)),
@@ -159,6 +160,8 @@ def load_mail_config(profile_name: str) -> MailConfig:
         chat_timeout_seconds=float(behavior_cfg.get("chat_timeout_seconds", 30.0)),
         onboarding_subject=str(behavior_cfg.get("onboarding_subject", "Thanks for your message")),
         mark_seen_after_processing=bool(behavior_cfg.get("mark_seen_after_processing", True)),
+        send_pending_reply=bool(behavior_cfg.get("send_pending_reply", False)),
+        pending_reply_cooldown_hours=int(behavior_cfg.get("pending_reply_cooldown_hours", 24)),
     )
 
     return MailConfig(

@@ -10,6 +10,7 @@ class MailAction(str, Enum):
     IGNORED_BLACKLIST = "ignored_blacklist"
     ADDED_TO_NEW = "added_to_new"
     ALREADY_NEW = "already_new"
+    PENDING_REPLY_SENT = "pending_reply_sent"
     REPLIED_WHITELIST = "replied_whitelist"
     ALREADY_PROCESSED = "already_processed"
     ERROR = "error"
@@ -31,6 +32,8 @@ class ContactEntry:
     created_at: str
     source: str = "mail_worker"
     note: str | None = None
+    onboarding_sent_at: str | None = None
+    last_pending_reply_at: str | None = None
 
 
 @dataclass(slots=True)

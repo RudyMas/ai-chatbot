@@ -39,6 +39,13 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def write_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as file:
+        for record in records:
+            file.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def append_jsonl(path: Path, record: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as file:
@@ -102,36 +109,3 @@ class ProcessedMessageStore:
         append_jsonl(self.processed_path, payload)
 
         return entry
-
-    def list_entries(self) -> list[ProcessedEntry]:
-        entries: list[ProcessedEntry] = []
-
-        for row in read_jsonl(self.processed_path):
-            message_id = row.get("message_id")
-            sender = row.get("sender")
-            action = row.get("action")
-            created_at = row.get("created_at")
-            details = row.get("details") or {}
-
-            if not all(isinstance(v, str) for v in (message_id, sender, action, created_at)):
-                continue
-
-            try:
-                action_enum = MailAction(action)
-            except ValueError:
-                continue
-
-            if not isinstance(details, dict):
-                details = {}
-
-            entries.append(
-                ProcessedEntry(
-                    message_id=message_id.strip(),
-                    sender=normalize_email(sender),
-                    action=action_enum,
-                    created_at=created_at,
-                    details=details,
-                )
-            )
-
-        return entries
