@@ -15,7 +15,7 @@ class SMTPClient:
     use_tls: bool = True
     use_ssl: bool = False
     from_email: str | None = None
-    from_name: str = "Patricia"
+    from_name: str | None = None  # <-- no default anymore
 
     @property
     def enabled(self) -> bool:
@@ -37,6 +37,7 @@ class SMTPClient:
 
         message = EmailMessage()
 
+        # Build From header safely
         if self.from_name:
             message["From"] = f"{self.from_name} <{self.from_email}>"
         else:
@@ -57,8 +58,11 @@ class SMTPClient:
                 smtp = smtplib.SMTP(self.host, self.port, timeout=20)
 
             with smtp:
+                smtp.ehlo()
+
                 if self.use_tls and not self.use_ssl:
                     smtp.starttls()
+                    smtp.ehlo()
 
                 if self.username:
                     smtp.login(self.username, self.password or "")
@@ -68,6 +72,5 @@ class SMTPClient:
             return True
 
         except Exception as exc:
-            # You could log this later
             print(f"[SMTP ERROR] Failed to send email to {to_email}: {exc}")
             return False

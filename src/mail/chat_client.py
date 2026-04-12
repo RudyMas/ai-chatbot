@@ -8,8 +8,8 @@ import requests
 @dataclass(slots=True)
 class ChatClient:
     api_base_url: str
-    profile: str = "patricia"
-    user_name: str = "Patricia"
+    profile: str = "default"
+    user_name: str = "Assistant"
     timeout_seconds: float = 30.0
 
     def build_reply(self, sender: str, subject: str | None, body: str | None) -> str:
@@ -18,9 +18,10 @@ class ChatClient:
         clean_sender = (sender or "").strip()
         clean_subject = (subject or "").strip() or "(no subject)"
         clean_body = (body or "").strip() or "(empty message)"
+        assistant_name = (self.user_name or "Assistant").strip()
 
         prompt = (
-            "Write a short, natural plain-text email reply as Patricia.\n"
+            f"Write a short, natural plain-text email reply as {assistant_name}.\n"
             "Rules:\n"
             "- Reply in plain text only.\n"
             "- Do not use markdown.\n"
@@ -35,7 +36,7 @@ class ChatClient:
 
         payload = {
             "message": prompt,
-            "user": self.user_name,
+            "user": assistant_name,
             "session": f"mail:{clean_sender}",
         }
 
