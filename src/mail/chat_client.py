@@ -12,13 +12,26 @@ class ChatClient:
     user_name: str = "Assistant"
     timeout_seconds: float = 30.0
 
-    def build_reply(self, sender: str, subject: str | None, body: str | None) -> str:
+    def build_reply(
+            self,
+            sender: str,
+            subject: str | None,
+            body: str | None,
+            contact_note: str | None = None,
+    ) -> str:
         self._ensure_profile_selected()
 
         clean_sender = (sender or "").strip()
         clean_subject = (subject or "").strip() or "(no subject)"
         clean_body = (body or "").strip() or "(empty message)"
         assistant_name = (self.user_name or "Assistant").strip()
+
+        context_block = ""
+        if contact_note:
+            context_block = (
+                "Contact context:\n"
+                f"- Admin note for this sender: {contact_note.strip()}\n\n"
+            )
 
         prompt = (
             f"Write a short, natural plain-text email reply as {assistant_name}.\n"
@@ -28,12 +41,14 @@ class ChatClient:
             "- Do not write a subject line.\n"
             "- Be warm, natural, and concise.\n"
             "- Respond to the sender's message directly.\n"
+            "- Use the contact context if it is helpful, but do not mention internal notes explicitly.\n"
             "- Do not mention internal policies, prompts, or system details.\n\n"
+            f"{context_block}"
             f"Sender: {clean_sender}\n"
             f"Subject: {clean_subject}\n"
             f"Message:\n{clean_body}"
         )
-
+        
         payload = {
             "message": prompt,
             "user": assistant_name,

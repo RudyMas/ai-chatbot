@@ -67,10 +67,13 @@ class MailProcessor:
                 )
 
             if self.contact_manager.is_whitelisted(sender):
+                contact_note = self.contact_manager.get_contact_note(sender, "whitelist")
+
                 reply_text = self.chat_client.build_reply(
                     sender=sender,
                     subject=message.subject,
                     body=message.text_body,
+                    contact_note=contact_note,
                 )
 
                 reply_subject = build_reply_subject(message.subject, assistant_name)

@@ -139,6 +139,44 @@ class ContactManager:
         write_jsonl(self.paths.new, rows)
         return self.get_new_entry(normalized)
 
+    def get_contact_row(self, email: str, status: str) -> dict[str, object] | None:
+        normalized = normalize_email(email)
+
+        path = None
+        if status == "new":
+            path = self.paths.new
+        elif status == "whitelist":
+            path = self.paths.whitelist
+        elif status == "blacklist":
+            path = self.paths.blacklist
+
+        if path is None:
+            return None
+
+        for row in read_jsonl(path):
+            row_email = row.get("email")
+            if not isinstance(row_email, str):
+                continue
+
+            if normalize_email(row_email) != normalized:
+                continue
+
+            return dict(row)
+
+        return None
+
+    def get_contact_note(self, email: str, status: str) -> str | None:
+        row = self.get_contact_row(email, status)
+        if not row:
+            return None
+
+        note = row.get("note")
+        if note is None:
+            return None
+
+        text = str(note).strip()
+        return text or None
+
 
 def _clean_optional_string(value: object) -> str | None:
     if value is None:
