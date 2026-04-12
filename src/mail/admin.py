@@ -107,6 +107,41 @@ def register_admin_routes(app: FastAPI, root_dir: Path) -> None:
             "from_status": payload.from_status,
         }
 
+    @app.get("/admin/api/{profile_name}/debug")
+    def admin_debug(profile_name: str) -> dict[str, Any]:
+        cfg = _get_mail_config(profile_name)
+
+        def inspect(path: Path) -> dict[str, Any]:
+            rows = read_jsonl(path)
+            sample = rows[:3]
+            return {
+                "path": str(path),
+                "exists": path.exists(),
+                "count": len(rows),
+                "sample": sample,
+            }
+
+        return {
+            "profile": profile_name,
+            "base_dir": str(cfg.paths.base_dir),
+            "new": inspect(cfg.paths.new),
+            "whitelist": inspect(cfg.paths.whitelist),
+            "blacklist": inspect(cfg.paths.blacklist),
+        }
+
+    @app.get("/admin/api/{profile}/counts")
+    def admin_counts(profile: str):
+        cfg = _get_mail_config(profile)
+
+        return {
+            "profile": profile,
+            "counts": {
+                "new": len(_list_contacts(cfg, "new")),
+                "whitelist": len(_list_contacts(cfg, "whitelist")),
+                "blacklist": len(_list_contacts(cfg, "blacklist")),
+            },
+        }
+
 
 def _get_mail_config(profile_name: str) -> MailConfig:
     try:

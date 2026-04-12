@@ -7,6 +7,7 @@ from typing import Any
 
 from bot.profiles import load_profile
 
+ROOT = Path(__file__).parents[0]
 
 @dataclass(slots=True)
 class MailPaths:
@@ -109,7 +110,10 @@ def load_mail_config(profile_name: str) -> MailConfig:
         files_cfg = {}
 
     base_dir = files_cfg.get("base_dir") or f"data/email/{profile_name}"
-    paths = MailPaths.from_base_dir(base_dir)
+    base_path = Path(base_dir)
+    if not base_path.is_absolute():
+        base_path = ROOT / base_path
+    paths = MailPaths.from_base_dir(base_path)
 
     imap_cfg = email_cfg.get("imap") or {}
     if not isinstance(imap_cfg, dict):

@@ -114,7 +114,7 @@
     <select id="profileSelect"></select>
 
     <label for="searchInput">Search</label>
-    <input id="searchInput" type="text" placeholder="Filter by email, source, note..." />
+    <input id="searchInput" type="text" placeholder="Filter by email, source, note..."/>
 
     <div class="toolbar-actions">
         <button id="refreshBtn">Refresh</button>
@@ -125,13 +125,13 @@
     <span id="statusText" class="muted"></span>
 </div>
 
+<div id="countBar" class="muted" style="margin-bottom: 12px;"></div>
+
 <div class="tabs">
     <button class="tab active" data-status="new">New</button>
     <button class="tab" data-status="whitelist">Whitelist</button>
     <button class="tab" data-status="blacklist">Blacklist</button>
 </div>
-
-<div id="countBar" class="muted"></div>
 
 <div id="tableWrap"></div>
 
@@ -147,9 +147,56 @@
 
     let currentStatus = 'new';
     let currentItems = [];
+    let currentCounts = {new: 0, whitelist: 0, blacklist: 0};
 
     function setStatus(text) {
         statusText.textContent = text || '';
+    }
+
+    function renderCounts() {
+        if (!countBar) {
+            return;
+        }
+
+        countBar.textContent =
+            `New: ${currentCounts.new} | Whitelist: ${currentCounts.whitelist} | Blacklist: ${currentCounts.blacklist}`;
+    }
+
+    async function loadCounts() {
+        const profile = profileSelect.value;
+        if (!profile) {
+            currentCounts = {new: 0, whitelist: 0, blacklist: 0};
+            renderCounts();
+            return;
+        }
+
+        const data = await api(`/admin/api/${encodeURIComponent(profile)}/counts`);
+        currentCounts = data.counts || data || {new: 0, whitelist: 0, blacklist: 0};
+        renderCounts();
+    }
+
+    function getFilteredItems() {
+        const query = searchInput.value.trim().toLowerCase();
+        if (!query) {
+            return currentItems;
+        }
+
+        return currentItems.filter(item => {
+            const haystack = [
+                item.email,
+                item.source,
+                item.note,
+                item.created_at,
+                item.updated_at,
+                item.onboarding_sent_at,
+                item.last_pending_reply_at
+            ]
+                .filter(Boolean)
+                .join(' ')
+                .toLowerCase();
+
+            return haystack.includes(query);
+        });
     }
 
     function escapeHtml(value) {
@@ -172,7 +219,8 @@
             try {
                 const data = await response.json();
                 detail = data.detail || detail;
-            } catch (_) {}
+            } catch (_) {
+            }
             throw new Error(detail);
         }
 
@@ -211,31 +259,8 @@
             : `<span class="muted">No metadata</span>`;
     }
 
-    function getFilteredItems() {
-        const query = searchInput.value.trim().toLowerCase();
-        if (!query) return currentItems;
-
-        return currentItems.filter(item => {
-            const haystack = [
-                item.email,
-                item.source,
-                item.note,
-                item.created_at,
-                item.updated_at,
-                item.onboarding_sent_at,
-                item.last_pending_reply_at
-            ]
-                .filter(Boolean)
-                .join(' ')
-                .toLowerCase();
-
-            return haystack.includes(query);
-        });
-    }
-
     function renderTable() {
         const items = getFilteredItems();
-        countBar.textContent = `${items.length} shown${items.length !== currentItems.length ? ` of ${currentItems.length}` : ''}`;
 
         if (!items.length) {
             tableWrap.innerHTML = `<div class="empty">No contacts found.</div>`;
@@ -243,30 +268,30 @@
         }
 
         tableWrap.innerHTML = `
-            <table>
-                <thead>
+        <table>
+            <thead>
+                <tr>
+                    <th>Email</th>
+                    <th>Info</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${items.map(item => `
                     <tr>
-                        <th>Email</th>
-                        <th>Info</th>
-                        <th>Actions</th>
+                        <td class="email-cell">
+                            ${escapeHtml(item.email)}
+                            <div style="margin-top:6px;">
+                                <span class="pill">${escapeHtml(item.status)}</span>
+                            </div>
+                        </td>
+                        <td>${formatMeta(item)}</td>
+                        <td class="actions">${renderActions(item)}</td>
                     </tr>
-                </thead>
-                <tbody>
-                    ${items.map(item => `
-                        <tr>
-                            <td class="email-cell">
-                                ${escapeHtml(item.email)}
-                                <div style="margin-top:6px;">
-                                    <span class="pill">${escapeHtml(item.status)}</span>
-                                </div>
-                            </td>
-                            <td>${formatMeta(item)}</td>
-                            <td class="actions">${renderActions(item)}</td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
-        `;
+                `).join('')}
+            </tbody>
+        </table>
+    `;
 
         bindActionButtons();
     }
@@ -344,14 +369,22 @@
         const profile = profileSelect.value;
         if (!profile) {
             currentItems = [];
+            currentCounts = {new: 0, whitelist: 0, blacklist: 0};
+            renderCounts();
             renderTable();
             return;
         }
 
         try {
             setStatus('Loading contacts...');
-            const data = await api(`/admin/api/${encodeURIComponent(profile)}/contacts?status=${encodeURIComponent(currentStatus)}`);
-            currentItems = data.items || [];
+
+            const contactsData = await api(
+                `/admin/api/${encodeURIComponent(profile)}/contacts?status=${encodeURIComponent(currentStatus)}`
+            );
+
+            await loadCounts();
+
+            currentItems = contactsData.items || [];
             renderTable();
 
             const selected = profileSelect.options[profileSelect.selectedIndex];
@@ -359,6 +392,8 @@
             setStatus(`Loaded ${currentItems.length} contact(s). ${baseDir ? `Data: ${baseDir}` : ''}`);
         } catch (err) {
             currentItems = [];
+            currentCounts = {new: 0, whitelist: 0, blacklist: 0};
+            renderCounts();
             renderTable();
             setStatus(`Error: ${err.message}`);
         }
@@ -382,6 +417,8 @@
         await loadProfiles();
         await loadContacts();
     })();
+
+    loadContacts();
 </script>
 </body>
 </html>
