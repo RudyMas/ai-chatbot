@@ -105,6 +105,8 @@ email:
     active_profile: "default"
     chat_user: "Jarvis"
     chat_timeout_seconds: 30.0
+    send_pending_reply: true
+    pending_reply_cooldown_hours: 24
 
   files:
     base_dir: "data/email/jarvis"
