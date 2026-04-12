@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <title>Mail Admin</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 1200px;
+            margin: 24px auto;
+            padding: 0 16px;
+        }
+
+        .row {
+            display: flex;
+            gap: 8px;
+            margin: 8px 0;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .muted {
+            color: #666;
+            font-size: 0.92em;
+        }
+
+        button {
+            padding: 8px 12px;
+            cursor: pointer;
+        }
+
+        select, input[type="text"] {
+            padding: 8px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin: 16px 0;
+            flex-wrap: wrap;
+        }
+
+        .tab.active {
+            font-weight: 700;
+            border: 2px solid #333;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+        }
+
+        th, td {
+            text-align: left;
+            vertical-align: top;
+            padding: 8px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        td.actions {
+            white-space: nowrap;
+        }
+
+        .pill {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: #eee;
+            font-size: 12px;
+        }
+
+        .topbar {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .spacer {
+            flex: 1 1 auto;
+        }
+
+        .empty {
+            padding: 16px;
+            color: #666;
+            border: 1px dashed #ccc;
+            border-radius: 8px;
+            margin-top: 12px;
+        }
+
+        .email-cell {
+            font-weight: 600;
+        }
+
+        .meta-block {
+            line-height: 1.5;
+        }
+
+        .toolbar-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+    </style>
+</head>
+<body>
+<h1>AI Mail Admin</h1>
+
+<div class="topbar">
+    <label for="profileSelect">Profile</label>
+    <select id="profileSelect"></select>
+
+    <label for="searchInput">Search</label>
+    <input id="searchInput" type="text" placeholder="Filter by email, source, note..." />
+
+    <div class="toolbar-actions">
+        <button id="refreshBtn">Refresh</button>
+        <button id="openMainUiBtn">Open Main UI</button>
+    </div>
+
+    <div class="spacer"></div>
+    <span id="statusText" class="muted"></span>
+</div>
+
+<div class="tabs">
+    <button class="tab active" data-status="new">New</button>
+    <button class="tab" data-status="whitelist">Whitelist</button>
+    <button class="tab" data-status="blacklist">Blacklist</button>
+</div>
+
+<div id="countBar" class="muted"></div>
+
+<div id="tableWrap"></div>
+
+<script>
+    const profileSelect = document.getElementById('profileSelect');
+    const searchInput = document.getElementById('searchInput');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const openMainUiBtn = document.getElementById('openMainUiBtn');
+    const statusText = document.getElementById('statusText');
+    const tableWrap = document.getElementById('tableWrap');
+    const countBar = document.getElementById('countBar');
+    const tabs = [...document.querySelectorAll('.tab')];
+
+    let currentStatus = 'new';
+    let currentItems = [];
+
+    function setStatus(text) {
+        statusText.textContent = text || '';
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#039;');
+    }
+
+    async function api(url, options = {}) {
+        const response = await fetch(url, {
+            headers: {'Content-Type': 'application/json'},
+            ...options
+        });
+
+        if (!response.ok) {
+            let detail = response.statusText;
+            try {
+                const data = await response.json();
+                detail = data.detail || detail;
+            } catch (_) {}
+            throw new Error(detail);
+        }
+
+        return response.json();
+    }
+
+    async function loadProfiles() {
+        const data = await api('/admin/api/profiles');
+        profileSelect.innerHTML = '';
+
+        for (const item of data.profiles || []) {
+            const option = document.createElement('option');
+            option.value = item.profile;
+            option.textContent = item.profile;
+            option.dataset.baseDir = item.base_dir || '';
+            profileSelect.appendChild(option);
+        }
+
+        if (!profileSelect.value && profileSelect.options.length > 0) {
+            profileSelect.selectedIndex = 0;
+        }
+    }
+
+    function formatMeta(item) {
+        const lines = [];
+
+        if (item.created_at) lines.push(`<div><strong>Created:</strong> ${escapeHtml(item.created_at)}</div>`);
+        if (item.updated_at) lines.push(`<div><strong>Updated:</strong> ${escapeHtml(item.updated_at)}</div>`);
+        if (item.onboarding_sent_at) lines.push(`<div><strong>Onboarding sent:</strong> ${escapeHtml(item.onboarding_sent_at)}</div>`);
+        if (item.last_pending_reply_at) lines.push(`<div><strong>Pending reply sent:</strong> ${escapeHtml(item.last_pending_reply_at)}</div>`);
+        if (item.source) lines.push(`<div><strong>Source:</strong> ${escapeHtml(item.source)}</div>`);
+        if (item.note) lines.push(`<div><strong>Note:</strong> ${escapeHtml(item.note)}</div>`);
+
+        return lines.length
+            ? `<div class="meta-block">${lines.join('')}</div>`
+            : `<span class="muted">No metadata</span>`;
+    }
+
+    function getFilteredItems() {
+        const query = searchInput.value.trim().toLowerCase();
+        if (!query) return currentItems;
+
+        return currentItems.filter(item => {
+            const haystack = [
+                item.email,
+                item.source,
+                item.note,
+                item.created_at,
+                item.updated_at,
+                item.onboarding_sent_at,
+                item.last_pending_reply_at
+            ]
+                .filter(Boolean)
+                .join(' ')
+                .toLowerCase();
+
+            return haystack.includes(query);
+        });
+    }
+
+    function renderTable() {
+        const items = getFilteredItems();
+        countBar.textContent = `${items.length} shown${items.length !== currentItems.length ? ` of ${currentItems.length}` : ''}`;
+
+        if (!items.length) {
+            tableWrap.innerHTML = `<div class="empty">No contacts found.</div>`;
+            return;
+        }
+
+        tableWrap.innerHTML = `
+            <table>
+                <thead>
+                    <tr>
+                        <th>Email</th>
+                        <th>Info</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${items.map(item => `
+                        <tr>
+                            <td class="email-cell">
+                                ${escapeHtml(item.email)}
+                                <div style="margin-top:6px;">
+                                    <span class="pill">${escapeHtml(item.status)}</span>
+                                </div>
+                            </td>
+                            <td>${formatMeta(item)}</td>
+                            <td class="actions">${renderActions(item)}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+
+        bindActionButtons();
+    }
+
+    function renderActions(item) {
+        const email = encodeURIComponent(item.email);
+
+        if (currentStatus === 'new') {
+            return `
+                <button data-action="move" data-email="${email}" data-from="new" data-to="whitelist">Approve</button>
+                <button data-action="move" data-email="${email}" data-from="new" data-to="blacklist">Block</button>
+                <button data-action="remove" data-email="${email}" data-from="new">Remove</button>
+            `;
+        }
+
+        if (currentStatus === 'whitelist') {
+            return `
+                <button data-action="move" data-email="${email}" data-from="whitelist" data-to="blacklist">Blacklist</button>
+                <button data-action="remove" data-email="${email}" data-from="whitelist">Remove</button>
+            `;
+        }
+
+        return `
+            <button data-action="move" data-email="${email}" data-from="blacklist" data-to="whitelist">Whitelist</button>
+            <button data-action="remove" data-email="${email}" data-from="blacklist">Remove</button>
+        `;
+    }
+
+    function bindActionButtons() {
+        document.querySelectorAll('[data-action="move"]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const email = decodeURIComponent(btn.dataset.email);
+                const from_status = btn.dataset.from;
+                const to_status = btn.dataset.to;
+
+                try {
+                    setStatus(`Moving ${email}...`);
+                    await api(`/admin/api/${encodeURIComponent(profileSelect.value)}/contacts/move`, {
+                        method: 'POST',
+                        body: JSON.stringify({email, from_status, to_status})
+                    });
+                    await loadContacts();
+                    setStatus(`Moved ${email} from ${from_status} to ${to_status}.`);
+                } catch (err) {
+                    setStatus(`Error: ${err.message}`);
+                }
+            });
+        });
+
+        document.querySelectorAll('[data-action="remove"]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const email = decodeURIComponent(btn.dataset.email);
+                const from_status = btn.dataset.from;
+
+                if (!confirm(`Remove ${email} from ${from_status}?`)) {
+                    return;
+                }
+
+                try {
+                    setStatus(`Removing ${email}...`);
+                    await api(`/admin/api/${encodeURIComponent(profileSelect.value)}/contacts/remove`, {
+                        method: 'POST',
+                        body: JSON.stringify({email, from_status})
+                    });
+                    await loadContacts();
+                    setStatus(`Removed ${email} from ${from_status}.`);
+                } catch (err) {
+                    setStatus(`Error: ${err.message}`);
+                }
+            });
+        });
+    }
+
+    async function loadContacts() {
+        const profile = profileSelect.value;
+        if (!profile) {
+            currentItems = [];
+            renderTable();
+            return;
+        }
+
+        try {
+            setStatus('Loading contacts...');
+            const data = await api(`/admin/api/${encodeURIComponent(profile)}/contacts?status=${encodeURIComponent(currentStatus)}`);
+            currentItems = data.items || [];
+            renderTable();
+
+            const selected = profileSelect.options[profileSelect.selectedIndex];
+            const baseDir = selected?.dataset?.baseDir || '';
+            setStatus(`Loaded ${currentItems.length} contact(s). ${baseDir ? `Data: ${baseDir}` : ''}`);
+        } catch (err) {
+            currentItems = [];
+            renderTable();
+            setStatus(`Error: ${err.message}`);
+        }
+    }
+
+    tabs.forEach(tab => {
+        tab.addEventListener('click', async () => {
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            currentStatus = tab.dataset.status;
+            await loadContacts();
+        });
+    });
+
+    profileSelect.addEventListener('change', loadContacts);
+    searchInput.addEventListener('input', renderTable);
+    refreshBtn.addEventListener('click', loadContacts);
+    openMainUiBtn.addEventListener('click', () => window.open('/', '_blank'));
+
+    (async function init() {
+        await loadProfiles();
+        await loadContacts();
+    })();
+</script>
+</body>
+</html>

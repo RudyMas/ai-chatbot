@@ -26,6 +26,7 @@ from bot.rag.retriever import SimpleRetriever
 from bot.rag.summarizer import summarize_chunk
 from server.state import state, session_buffers, SessionBuffer
 from src.bot.tts_kokoro import kokoro_tts_to_wav_bytes, list_kokoro_voices
+from mail.admin import register_admin_routes
 
 # ---------- App bootstrap ----------
 ROOT = Path(__file__).parents[2]
@@ -35,6 +36,7 @@ app = FastAPI()
 WEB_DIR = ROOT / "web"
 WEB_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
+register_admin_routes(app, ROOT)
 
 # global mutable config (load default profile at boot)
 from bot.profiles import load_profile, list_profiles

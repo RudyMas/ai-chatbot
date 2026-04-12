@@ -85,6 +85,7 @@
 <div class="row">
     <button id="btnOpenViewer">🗔 Open Voice Viewer</button>
     <button id="btnOpenChat">💬 Open Chat</button>
+    <button id="btnOpenMailAdmin">📬 Open Mail Admin</button>
     <button id="btnDemoSpeak">💡 Demo: Let Jarvis Speak</button>
 </div>
 
@@ -393,6 +394,10 @@
 
         const url = '/static/viewer.html?' + new URLSearchParams({user, session, profile, tts, stt, lang});
         window.open(url, '_blank');
+    };
+
+    document.getElementById('btnOpenMailAdmin').onclick = () => {
+        window.open('/admin', '_blank');
     };
 
     document.getElementById('btnOpenChat').onclick = async () => {
