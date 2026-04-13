@@ -13,11 +13,12 @@ class ChatClient:
     timeout_seconds: float = 30.0
 
     def build_reply(
-            self,
-            sender: str,
-            subject: str | None,
-            body: str | None,
-            contact_note: str | None = None,
+        self,
+        sender: str,
+        subject: str | None,
+        body: str | None,
+        contact_note: str | None = None,
+        thread_context: str | None = None,
     ) -> str:
         self._ensure_profile_selected()
 
@@ -26,11 +27,20 @@ class ChatClient:
         clean_body = (body or "").strip() or "(empty message)"
         assistant_name = (self.user_name or "Assistant").strip()
 
+        clean_note = " ".join((contact_note or "").split()).strip()
+        clean_thread_context = (thread_context or "").strip()
+
         context_block = ""
-        if contact_note:
-            context_block = (
+        if clean_note:
+            context_block += (
                 "Contact context:\n"
-                f"- Admin note for this sender: {contact_note.strip()}\n\n"
+                f"- Admin note for this sender: {clean_note}\n\n"
+            )
+
+        if clean_thread_context:
+            context_block += (
+                "Recent email thread:\n"
+                f"{clean_thread_context}\n\n"
             )
 
         prompt = (
@@ -40,7 +50,9 @@ class ChatClient:
             "- Do not use markdown.\n"
             "- Do not write a subject line.\n"
             "- Be warm, natural, and concise.\n"
-            "- Respond to the sender's message directly.\n"
+            "- Respond to the sender's latest message directly.\n"
+            "- Keep continuity with the recent email thread when it is relevant.\n"
+            "- Do not repeat yourself unnecessarily if the thread already established something.\n"
             "- The contact context is private guidance only.\n"
             "- Do not assume it is factual unless the user confirms it in their message.\n"
             "- Do not reveal or reference the contact context directly.\n"
@@ -49,7 +61,7 @@ class ChatClient:
             f"{context_block}"
             f"Sender: {clean_sender}\n"
             f"Subject: {clean_subject}\n"
-            f"Message:\n{clean_body}"
+            f"Latest message:\n{clean_body}"
         )
 
         payload = {

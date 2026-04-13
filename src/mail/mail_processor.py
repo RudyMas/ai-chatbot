@@ -8,7 +8,13 @@ from mail.config import MailConfig
 from mail.contacts import ContactManager
 from mail.models import IncomingEmail, MailAction, ProcessingResult
 from mail.smtp_client import SMTPClient
-from mail.storage import ProcessedMessageStore, append_jsonl, normalize_email, utc_now_iso
+from mail.storage import (
+    ProcessedMessageStore,
+    append_jsonl,
+    normalize_email,
+    read_jsonl,
+    utc_now_iso,
+)
 from mail.templates import onboarding_body, onboarding_subject, pending_approval_body
 
 
@@ -58,6 +64,8 @@ class MailProcessor:
                     details={"message_id": message_id},
                 )
 
+            self._log_inbound(message)
+
             if self.contact_manager.is_blacklisted(sender):
                 self.processed_storage.add(
                     message_id,
@@ -78,12 +86,14 @@ class MailProcessor:
 
             if self.contact_manager.is_whitelisted(sender):
                 contact_note = self.contact_manager.get_contact_note(sender, "whitelist")
+                thread_context = self._build_thread_context(message)
 
                 reply_text = self.chat_client.build_reply(
                     sender=sender,
                     subject=message.subject,
                     body=message.text_body,
                     contact_note=contact_note,
+                    thread_context=thread_context,
                 )
 
                 reply_subject = build_reply_subject(message.subject, assistant_name)
@@ -111,6 +121,7 @@ class MailProcessor:
                     "references": thread_references,
                     "incoming_in_reply_to": message.in_reply_to,
                     "incoming_references": message.references,
+                    "thread_context_used": bool(thread_context),
                 }
 
                 self._log_outbound(
@@ -323,6 +334,127 @@ class MailProcessor:
         domain = (self.config.smtp.from_email or "localhost").split("@")[-1].strip() or "localhost"
         return f"<{uuid.uuid4().hex}@{domain}>"
 
+    def _canonical_subject(self, subject: str | None) -> str:
+        text = (subject or "").strip()
+        if not text:
+            return "(no subject)"
+
+        lowered = text
+        prefixes = ("re:", "fw:", "fwd:")
+        changed = True
+        while changed:
+            changed = False
+            stripped = lowered.lstrip()
+            for prefix in prefixes:
+                if stripped.lower().startswith(prefix):
+                    lowered = stripped[len(prefix):].strip()
+                    changed = True
+                    break
+
+        return lowered or "(no subject)"
+
+    def _log_inbound(self, message: IncomingEmail) -> None:
+        payload: dict[str, Any] = {
+            "ts": message.received_at.isoformat(timespec="seconds"),
+            "from": normalize_email(message.sender),
+            "subject": message.subject,
+            "body": message.text_body,
+            "kind": "inbound",
+            "message_id": message.message_id,
+            "in_reply_to": message.in_reply_to,
+            "references": list(message.references or []),
+            "canonical_subject": self._canonical_subject(message.subject),
+        }
+        append_jsonl(self.config.paths.inbound_log, payload)
+
+    def _build_thread_context(self, message: IncomingEmail, max_messages: int = 6) -> str:
+        sender = normalize_email(message.sender)
+        canonical_subject = self._canonical_subject(message.subject)
+
+        thread_ids = set(message.references or [])
+        if message.in_reply_to:
+            thread_ids.add(message.in_reply_to)
+        if message.message_id:
+            thread_ids.add(message.message_id)
+
+        history: list[dict[str, Any]] = []
+
+        for row in read_jsonl(self.config.paths.inbound_log):
+            row_sender = normalize_email(str(row.get("from") or ""))
+            row_message_id = str(row.get("message_id") or "").strip()
+            row_subject = self._canonical_subject(str(row.get("subject") or ""))
+
+            if row_sender != sender:
+                continue
+            if row_message_id == message.message_id:
+                continue
+
+            row_refs = [str(x).strip() for x in (row.get("references") or []) if str(x).strip()]
+            row_in_reply_to = str(row.get("in_reply_to") or "").strip()
+
+            subject_match = row_subject == canonical_subject
+            thread_match = (
+                row_message_id in thread_ids
+                or row_in_reply_to in thread_ids
+                or any(ref in thread_ids for ref in row_refs)
+            )
+
+            if not subject_match and not thread_match:
+                continue
+
+            history.append(
+                {
+                    "ts": str(row.get("ts") or ""),
+                    "role": "sender",
+                    "text": str(row.get("body") or "").strip(),
+                }
+            )
+
+        for row in read_jsonl(self.config.paths.outbound_log):
+            row_to = normalize_email(str(row.get("to") or ""))
+            row_subject = self._canonical_subject(str(row.get("subject") or ""))
+            row_message_id = str(row.get("message_id") or "").strip()
+            row_refs = [str(x).strip() for x in (row.get("references") or []) if str(x).strip()]
+            row_in_reply_to = str(row.get("in_reply_to") or "").strip()
+
+            if row_to != sender:
+                continue
+
+            subject_match = row_subject == canonical_subject
+            thread_match = (
+                row_message_id in thread_ids
+                or row_in_reply_to in thread_ids
+                or any(ref in thread_ids for ref in row_refs)
+            )
+
+            if not subject_match and not thread_match:
+                continue
+
+            history.append(
+                {
+                    "ts": str(row.get("ts") or ""),
+                    "role": "assistant",
+                    "text": str(row.get("body") or "").strip(),
+                }
+            )
+
+        history.sort(key=lambda item: item.get("ts") or "")
+        history = [item for item in history if item.get("text")]
+        history = history[-max_messages:]
+
+        if not history:
+            return ""
+
+        lines: list[str] = []
+        for item in history:
+            role = "Sender" if item["role"] == "sender" else "Assistant"
+            text = " ".join(item["text"].split()).strip()
+            if len(text) > 500:
+                text = text[:497] + "..."
+            lines.append(f"{role}: {text}")
+
+        return "\n".join(lines)
+
     def _log_outbound(
         self,
         sender: str,
@@ -344,5 +476,6 @@ class MailProcessor:
             "message_id": message_id,
             "in_reply_to": in_reply_to,
             "references": references or [],
+            "canonical_subject": self._canonical_subject(subject),
         }
         append_jsonl(self.config.paths.outbound_log, payload)

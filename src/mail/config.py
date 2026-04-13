@@ -9,6 +9,7 @@ from bot.profiles import load_profile
 
 ROOT = Path(__file__).parents[0]
 
+
 @dataclass(slots=True)
 class MailPaths:
     base_dir: Path
@@ -16,6 +17,7 @@ class MailPaths:
     blacklist: Path
     new: Path
     processed: Path
+    inbound_log: Path
     outbound_log: Path
 
     @classmethod
@@ -27,6 +29,7 @@ class MailPaths:
             blacklist=base / "blacklist.jsonl",
             new=base / "new.jsonl",
             processed=base / "processed.jsonl",
+            inbound_log=base / "inbound_log.jsonl",
             outbound_log=base / "outbound_log.jsonl",
         )
 
@@ -88,6 +91,7 @@ def ensure_mail_files(paths: MailPaths) -> None:
         paths.blacklist,
         paths.new,
         paths.processed,
+        paths.inbound_log,
         paths.outbound_log,
     ):
         if not path.exists():
