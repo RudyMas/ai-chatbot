@@ -104,6 +104,7 @@ class MailProcessor:
                     contact_note=contact_note,
                     thread_context=thread_context,
                     is_followup=is_followup,
+                    thread_id=thread_id,
                 )
 
                 reply_subject = build_reply_subject(message.subject, assistant_name)
@@ -406,7 +407,13 @@ class MailProcessor:
         }
         append_jsonl(self.config.paths.inbound_log, payload)
 
-    def _build_thread_context(self, thread_id: str, max_messages: int = 6) -> str:
+    def _build_thread_context(
+        self,
+        thread_id: str,
+        max_recent_messages: int = 4,
+        summary_trigger_count: int = 6,
+        summary_max_items: int = 4,
+    ) -> str:
         history: list[dict[str, Any]] = []
 
         for row in read_jsonl(self.config.paths.inbound_log):
@@ -437,20 +444,32 @@ class MailProcessor:
 
         history.sort(key=lambda item: item.get("ts") or "")
         history = [item for item in history if item.get("text")]
-        history = history[-max_messages:]
 
         if not history:
             return ""
 
-        lines: list[str] = []
-        for item in history:
-            role = "Sender" if item["role"] == "sender" else "Assistant"
-            text = " ".join(item["text"].split()).strip()
-            if len(text) > 500:
-                text = text[:497] + "..."
-            lines.append(f"{role}: {text}")
+        if len(history) <= summary_trigger_count:
+            return self._format_history_lines(history[-max_recent_messages:])
 
-        return "\n".join(lines)
+        earlier = history[:-max_recent_messages]
+        recent = history[-max_recent_messages:]
+
+        summary_block = self._summarize_history(
+            earlier,
+            max_items=summary_max_items,
+        )
+        recent_block = self._format_history_lines(recent)
+
+        blocks: list[str] = []
+        if summary_block:
+            blocks.append("Earlier in this thread:")
+            blocks.append(summary_block)
+
+        if recent_block:
+            blocks.append("Recent messages:")
+            blocks.append(recent_block)
+
+        return "\n".join(blocks).strip()
 
     def _log_outbound(
         self,
@@ -478,3 +497,98 @@ class MailProcessor:
             "canonical_subject": self._canonical_subject(subject),
         }
         append_jsonl(self.config.paths.outbound_log, payload)
+
+    def _format_history_lines(self, history: list[dict[str, Any]]) -> str:
+        lines: list[str] = []
+
+        for item in history:
+            role = "Sender" if item["role"] == "sender" else "Assistant"
+            text = self._compact_text(str(item.get("text") or ""), max_len=500)
+            if not text:
+                continue
+            lines.append(f"{role}: {text}")
+
+        return "\n".join(lines).strip()
+
+    def _summarize_history(
+        self,
+        history: list[dict[str, Any]],
+        max_items: int = 4,
+    ) -> str:
+        if not history:
+            return ""
+
+        summary_items: list[str] = []
+        last_role: str | None = None
+        last_text: str | None = None
+
+        for item in history:
+            role = "Sender" if item["role"] == "sender" else "Assistant"
+            text = self._compact_text(str(item.get("text") or ""), max_len=180)
+            if not text:
+                continue
+
+            # Avoid repeating near-identical consecutive items
+            if role == last_role and text == last_text:
+                continue
+
+            summary_items.append(f"- {role}: {text}")
+            last_role = role
+            last_text = text
+
+            if len(summary_items) >= max_items:
+                break
+
+        return "\n".join(summary_items).strip()
+
+    def _compact_text(self, text: str, max_len: int = 200) -> str:
+        value = " ".join((text or "").split()).strip()
+        if not value:
+            return ""
+
+        # Strip common email greeting lines at the start
+        greeting_prefixes = (
+            "hi ",
+            "hello ",
+            "hey ",
+            "dear ",
+        )
+
+        lowered = value.lower()
+        for prefix in greeting_prefixes:
+            if lowered.startswith(prefix):
+                parts = value.split(",", 1)
+                if len(parts) == 2:
+                    value = parts[1].strip()
+                break
+
+        # Strip common sign-off tails
+        signoff_markers = [
+            " regards,",
+            " best regards,",
+            " kind regards,",
+            " best,",
+            " cya,",
+            " thanks,",
+        ]
+        lower_value = value.lower()
+        cut_index = None
+        for marker in signoff_markers:
+            idx = lower_value.find(marker)
+            if idx > 0:
+                cut_index = idx if cut_index is None else min(cut_index, idx)
+
+        if cut_index is not None:
+            value = value[:cut_index].strip()
+
+        # Prefer first sentence for summary-like compacting
+        sentence_parts = value.split(". ")
+        if sentence_parts:
+            candidate = sentence_parts[0].strip()
+            if candidate:
+                value = candidate.rstrip(".!?") + ("." if len(sentence_parts) > 1 else "")
+
+        if len(value) > max_len:
+            value = value[: max_len - 3].rstrip() + "..."
+
+        return value
