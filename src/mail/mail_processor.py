@@ -16,6 +16,12 @@ from mail.storage import (
     utc_now_iso,
 )
 from mail.templates import onboarding_body, onboarding_subject, pending_approval_body
+from mail.threading import (
+    canonicalize_subject,
+    normalize_message_id,
+    normalize_references,
+    resolve_thread_id,
+)
 
 
 def build_reply_subject(subject: str | None, fallback_name: str) -> str:
@@ -64,7 +70,8 @@ class MailProcessor:
                     details={"message_id": message_id},
                 )
 
-            self._log_inbound(message)
+            thread_id = self._resolve_incoming_thread_id(message, sender, message_id)
+            self._log_inbound(message, thread_id=thread_id, resolved_message_id=message_id)
 
             if self.contact_manager.is_blacklisted(sender):
                 self.processed_storage.add(
@@ -73,6 +80,7 @@ class MailProcessor:
                     MailAction.IGNORED_BLACKLIST,
                     details={
                         "message_id": message_id,
+                        "thread_id": thread_id,
                         "incoming_in_reply_to": message.in_reply_to,
                         "incoming_references": message.references,
                     },
@@ -81,12 +89,12 @@ class MailProcessor:
                     sender=sender,
                     action=MailAction.IGNORED_BLACKLIST,
                     email_sent=False,
-                    details={"message_id": message_id},
+                    details={"message_id": message_id, "thread_id": thread_id},
                 )
 
             if self.contact_manager.is_whitelisted(sender):
                 contact_note = self.contact_manager.get_contact_note(sender, "whitelist")
-                thread_context = self._build_thread_context(message)
+                thread_context = self._build_thread_context(thread_id=thread_id)
                 is_followup = bool(message.in_reply_to or message.references or thread_context)
 
                 reply_text = self.chat_client.build_reply(
@@ -116,6 +124,7 @@ class MailProcessor:
 
                 details = {
                     "message_id": message_id,
+                    "thread_id": thread_id,
                     "smtp_enabled": self.smtp_client.enabled,
                     "reply_subject": reply_subject,
                     "outbound_message_id": outbound_message_id,
@@ -133,6 +142,7 @@ class MailProcessor:
                     body=reply_text,
                     kind="whitelist_reply",
                     sent=sent,
+                    thread_id=thread_id,
                     message_id=outbound_message_id,
                     in_reply_to=message.message_id,
                     references=thread_references,
@@ -158,6 +168,7 @@ class MailProcessor:
                     assistant_name=assistant_name,
                     signature=signature,
                     incoming_message=message,
+                    thread_id=thread_id,
                 )
 
             new_entry = self.contact_manager.add_new(sender, note="auto-added from inbound email")
@@ -176,6 +187,7 @@ class MailProcessor:
                 body=body,
                 kind="onboarding",
                 sent=sent,
+                thread_id=thread_id,
             )
 
             if sent:
@@ -187,6 +199,7 @@ class MailProcessor:
                 MailAction.ADDED_TO_NEW,
                 details={
                     "message_id": message_id,
+                    "thread_id": thread_id,
                     "onboarding_sent": sent,
                     "smtp_enabled": self.smtp_client.enabled,
                     "added_to": "new",
@@ -202,6 +215,7 @@ class MailProcessor:
                 email_sent=sent,
                 details={
                     "message_id": message_id,
+                    "thread_id": thread_id,
                     "added_to": "new",
                     "created_at": new_entry.created_at,
                 },
@@ -229,6 +243,7 @@ class MailProcessor:
         assistant_name: str,
         signature: str | None,
         incoming_message: IncomingEmail,
+        thread_id: str,
     ) -> ProcessingResult:
         if not self.config.behavior.send_pending_reply:
             self.processed_storage.add(
@@ -237,6 +252,7 @@ class MailProcessor:
                 MailAction.ALREADY_NEW,
                 details={
                     "message_id": message_id,
+                    "thread_id": thread_id,
                     "reason": "sender already queued for review",
                     "pending_reply_enabled": False,
                     "incoming_in_reply_to": incoming_message.in_reply_to,
@@ -249,6 +265,7 @@ class MailProcessor:
                 email_sent=False,
                 details={
                     "message_id": message_id,
+                    "thread_id": thread_id,
                     "reason": "sender already queued for review",
                     "pending_reply_enabled": False,
                 },
@@ -264,6 +281,7 @@ class MailProcessor:
                 MailAction.ALREADY_NEW,
                 details={
                     "message_id": message_id,
+                    "thread_id": thread_id,
                     "reason": "pending approval reply cooldown active",
                     "cooldown_hours": cooldown_hours,
                     "incoming_in_reply_to": incoming_message.in_reply_to,
@@ -276,6 +294,7 @@ class MailProcessor:
                 email_sent=False,
                 details={
                     "message_id": message_id,
+                    "thread_id": thread_id,
                     "reason": "pending approval reply cooldown active",
                     "cooldown_hours": cooldown_hours,
                 },
@@ -296,6 +315,7 @@ class MailProcessor:
             body=body,
             kind="pending_approval",
             sent=sent,
+            thread_id=thread_id,
         )
 
         if sent:
@@ -307,6 +327,7 @@ class MailProcessor:
             MailAction.PENDING_REPLY_SENT,
             details={
                 "message_id": message_id,
+                "thread_id": thread_id,
                 "pending_reply_sent": sent,
                 "smtp_enabled": self.smtp_client.enabled,
                 "cooldown_hours": cooldown_hours,
@@ -321,88 +342,76 @@ class MailProcessor:
             email_sent=sent,
             details={
                 "message_id": message_id,
+                "thread_id": thread_id,
                 "cooldown_hours": cooldown_hours,
             },
         )
 
     def _resolve_message_id(self, message: IncomingEmail, sender: str) -> str:
-        raw = (message.message_id or "").strip()
+        raw = normalize_message_id(message.message_id)
         if raw:
             return raw
 
-        subject = (message.subject or "").strip()
-        return f"fallback:{sender}:{subject}:{utc_now_iso()}"
+        subject = self._canonical_subject(message.subject)
+        return f"fallback:{sender}:{subject}:{utc_now_iso()}".lower()
 
     def _build_outbound_message_id(self) -> str:
         domain = (self.config.smtp.from_email or "localhost").split("@")[-1].strip() or "localhost"
         return f"<{uuid.uuid4().hex}@{domain}>"
 
     def _canonical_subject(self, subject: str | None) -> str:
-        text = (subject or "").strip()
-        if not text:
-            return "(no subject)"
+        return canonicalize_subject(subject)
 
-        lowered = text
-        prefixes = ("re:", "fw:", "fwd:")
-        changed = True
-        while changed:
-            changed = False
-            stripped = lowered.lstrip()
-            for prefix in prefixes:
-                if stripped.lower().startswith(prefix):
-                    lowered = stripped[len(prefix):].strip()
-                    changed = True
-                    break
+    def _resolve_incoming_thread_id(
+        self,
+        message: IncomingEmail,
+        sender: str,
+        resolved_message_id: str,
+    ) -> str:
+        inbound_rows = read_jsonl(self.config.paths.inbound_log)
+        outbound_rows = read_jsonl(self.config.paths.outbound_log)
 
-        return lowered or "(no subject)"
+        timestamp = message.received_at.isoformat(timespec="seconds")
 
-    def _log_inbound(self, message: IncomingEmail) -> None:
+        return resolve_thread_id(
+            profile_name=self.config.profile_name,
+            sender_email=sender,
+            subject=message.subject,
+            timestamp=timestamp,
+            message_id=resolved_message_id,
+            in_reply_to=message.in_reply_to,
+            references=message.references,
+            inbound_rows=inbound_rows,
+            outbound_rows=outbound_rows,
+        )
+
+    def _log_inbound(
+        self,
+        message: IncomingEmail,
+        *,
+        thread_id: str,
+        resolved_message_id: str,
+    ) -> None:
         payload: dict[str, Any] = {
             "ts": message.received_at.isoformat(timespec="seconds"),
             "from": normalize_email(message.sender),
             "subject": message.subject,
             "body": message.text_body,
             "kind": "inbound",
-            "message_id": message.message_id,
-            "in_reply_to": message.in_reply_to,
-            "references": list(message.references or []),
+            "thread_id": thread_id,
+            "message_id": normalize_message_id(resolved_message_id),
+            "in_reply_to": normalize_message_id(message.in_reply_to),
+            "references": normalize_references(message.references),
             "canonical_subject": self._canonical_subject(message.subject),
         }
         append_jsonl(self.config.paths.inbound_log, payload)
 
-    def _build_thread_context(self, message: IncomingEmail, max_messages: int = 6) -> str:
-        sender = normalize_email(message.sender)
-        canonical_subject = self._canonical_subject(message.subject)
-
-        thread_ids = set(message.references or [])
-        if message.in_reply_to:
-            thread_ids.add(message.in_reply_to)
-        if message.message_id:
-            thread_ids.add(message.message_id)
-
+    def _build_thread_context(self, thread_id: str, max_messages: int = 6) -> str:
         history: list[dict[str, Any]] = []
 
         for row in read_jsonl(self.config.paths.inbound_log):
-            row_sender = normalize_email(str(row.get("from") or ""))
-            row_message_id = str(row.get("message_id") or "").strip()
-            row_subject = self._canonical_subject(str(row.get("subject") or ""))
-
-            if row_sender != sender:
-                continue
-            if row_message_id == message.message_id:
-                continue
-
-            row_refs = [str(x).strip() for x in (row.get("references") or []) if str(x).strip()]
-            row_in_reply_to = str(row.get("in_reply_to") or "").strip()
-
-            subject_match = row_subject == canonical_subject
-            thread_match = (
-                row_message_id in thread_ids
-                or row_in_reply_to in thread_ids
-                or any(ref in thread_ids for ref in row_refs)
-            )
-
-            if not subject_match and not thread_match:
+            row_thread_id = str(row.get("thread_id") or "").strip()
+            if row_thread_id != thread_id:
                 continue
 
             history.append(
@@ -414,23 +423,8 @@ class MailProcessor:
             )
 
         for row in read_jsonl(self.config.paths.outbound_log):
-            row_to = normalize_email(str(row.get("to") or ""))
-            row_subject = self._canonical_subject(str(row.get("subject") or ""))
-            row_message_id = str(row.get("message_id") or "").strip()
-            row_refs = [str(x).strip() for x in (row.get("references") or []) if str(x).strip()]
-            row_in_reply_to = str(row.get("in_reply_to") or "").strip()
-
-            if row_to != sender:
-                continue
-
-            subject_match = row_subject == canonical_subject
-            thread_match = (
-                row_message_id in thread_ids
-                or row_in_reply_to in thread_ids
-                or any(ref in thread_ids for ref in row_refs)
-            )
-
-            if not subject_match and not thread_match:
+            row_thread_id = str(row.get("thread_id") or "").strip()
+            if row_thread_id != thread_id:
                 continue
 
             history.append(
@@ -465,6 +459,7 @@ class MailProcessor:
         body: str,
         kind: str,
         sent: bool,
+        thread_id: str,
         message_id: str | None = None,
         in_reply_to: str | None = None,
         references: list[str] | None = None,
@@ -476,9 +471,10 @@ class MailProcessor:
             "body": body,
             "kind": kind,
             "sent": sent,
-            "message_id": message_id,
-            "in_reply_to": in_reply_to,
-            "references": references or [],
+            "thread_id": thread_id,
+            "message_id": normalize_message_id(message_id),
+            "in_reply_to": normalize_message_id(in_reply_to),
+            "references": normalize_references(references),
             "canonical_subject": self._canonical_subject(subject),
         }
         append_jsonl(self.config.paths.outbound_log, payload)

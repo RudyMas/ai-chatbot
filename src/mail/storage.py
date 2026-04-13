@@ -73,14 +73,19 @@ class ProcessedMessageStore:
     def __init__(self, processed_path: Path):
         self.processed_path = processed_path
 
+    def _normalize_message_id(self, message_id: str | None) -> str:
+        if not message_id:
+            return ""
+        return message_id.strip().strip("<>").strip().lower()
+
     def has_message(self, message_id: str | None) -> bool:
-        normalized_message_id = (message_id or "").strip()
+        normalized_message_id = self._normalize_message_id(message_id)
         if not normalized_message_id:
             return False
 
         for row in read_jsonl(self.processed_path):
             row_message_id = row.get("message_id")
-            if isinstance(row_message_id, str) and row_message_id.strip() == normalized_message_id:
+            if isinstance(row_message_id, str) and self._normalize_message_id(row_message_id) == normalized_message_id:
                 return True
 
         return False
@@ -92,7 +97,7 @@ class ProcessedMessageStore:
         action: MailAction,
         details: dict[str, Any] | None = None,
     ) -> ProcessedEntry:
-        clean_message_id = (message_id or "").strip()
+        clean_message_id = self._normalize_message_id(message_id)
         if not clean_message_id:
             raise ValueError("message_id is required")
 
