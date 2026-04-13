@@ -97,6 +97,9 @@ class IMAPClient:
         message_id = self._resolve_message_id(msg, sender_email, subject, imap_message_id)
         received_at = self._extract_received_at(msg)
 
+        in_reply_to = (msg.get("In-Reply-To") or "").strip() or None
+        references = self._extract_message_id_list(msg.get("References"))
+
         metadata = {
             "imap_message_id": imap_message_id.decode("utf-8", errors="replace"),
             "raw_from": raw_from,
@@ -111,6 +114,8 @@ class IMAPClient:
             text_body=text_body,
             received_at=received_at,
             metadata=metadata,
+            in_reply_to=in_reply_to,
+            references=references,
         )
 
     def _resolve_message_id(
@@ -219,6 +224,19 @@ class IMAPClient:
             return "".join(decoded).strip()
         except Exception:
             return value.strip()
+
+    def _extract_message_id_list(self, raw_value: str | None) -> list[str]:
+        if not raw_value:
+            return []
+
+        import re
+
+        matches = re.findall(r"<[^>]+>", raw_value)
+        if matches:
+            return [m.strip() for m in matches if m.strip()]
+
+        text = raw_value.strip()
+        return [text] if text else []
 
     def _html_to_text(self, html: str) -> str:
         """

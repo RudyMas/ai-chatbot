@@ -15,7 +15,7 @@ class SMTPClient:
     use_tls: bool = True
     use_ssl: bool = False
     from_email: str | None = None
-    from_name: str | None = None  # <-- no default anymore
+    from_name: str | None = None
 
     @property
     def enabled(self) -> bool:
@@ -27,6 +27,9 @@ class SMTPClient:
         subject: str,
         body: str,
         reply_to: Optional[str] = None,
+        message_id: Optional[str] = None,
+        in_reply_to: Optional[str] = None,
+        references: Optional[list[str]] = None,
     ) -> bool:
         if not self.enabled:
             return False
@@ -37,7 +40,6 @@ class SMTPClient:
 
         message = EmailMessage()
 
-        # Build From header safely
         if self.from_name:
             message["From"] = f"{self.from_name} <{self.from_email}>"
         else:
@@ -45,6 +47,17 @@ class SMTPClient:
 
         message["To"] = to_email
         message["Subject"] = subject
+
+        if message_id:
+            message["Message-ID"] = message_id
+
+        if in_reply_to:
+            message["In-Reply-To"] = in_reply_to
+
+        if references:
+            clean_refs = [r.strip() for r in references if isinstance(r, str) and r.strip()]
+            if clean_refs:
+                message["References"] = " ".join(clean_refs)
 
         if reply_to:
             message["Reply-To"] = reply_to

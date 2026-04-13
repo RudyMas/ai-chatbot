@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import uuid
 
 from mail.chat_client import ChatClient
 from mail.config import MailConfig
@@ -58,7 +59,16 @@ class MailProcessor:
                 )
 
             if self.contact_manager.is_blacklisted(sender):
-                self.processed_storage.add(message_id, sender, MailAction.IGNORED_BLACKLIST)
+                self.processed_storage.add(
+                    message_id,
+                    sender,
+                    MailAction.IGNORED_BLACKLIST,
+                    details={
+                        "message_id": message_id,
+                        "incoming_in_reply_to": message.in_reply_to,
+                        "incoming_references": message.references,
+                    },
+                )
                 return ProcessingResult(
                     sender=sender,
                     action=MailAction.IGNORED_BLACKLIST,
@@ -77,17 +87,30 @@ class MailProcessor:
                 )
 
                 reply_subject = build_reply_subject(message.subject, assistant_name)
+                outbound_message_id = self._build_outbound_message_id()
+
+                thread_references = list(message.references or [])
+                if message.message_id and message.message_id not in thread_references:
+                    thread_references.append(message.message_id)
 
                 sent = self.smtp_client.send_plain_text(
                     to_email=sender,
                     subject=reply_subject,
                     body=reply_text,
+                    message_id=outbound_message_id,
+                    in_reply_to=message.message_id,
+                    references=thread_references,
                 )
 
                 details = {
                     "message_id": message_id,
                     "smtp_enabled": self.smtp_client.enabled,
                     "reply_subject": reply_subject,
+                    "outbound_message_id": outbound_message_id,
+                    "in_reply_to": message.message_id,
+                    "references": thread_references,
+                    "incoming_in_reply_to": message.in_reply_to,
+                    "incoming_references": message.references,
                 }
 
                 self._log_outbound(
@@ -96,6 +119,9 @@ class MailProcessor:
                     body=reply_text,
                     kind="whitelist_reply",
                     sent=sent,
+                    message_id=outbound_message_id,
+                    in_reply_to=message.message_id,
+                    references=thread_references,
                 )
                 self.processed_storage.add(
                     message_id,
@@ -117,6 +143,7 @@ class MailProcessor:
                     message_id=message_id,
                     assistant_name=assistant_name,
                     signature=signature,
+                    incoming_message=message,
                 )
 
             new_entry = self.contact_manager.add_new(sender, note="auto-added from inbound email")
@@ -150,6 +177,8 @@ class MailProcessor:
                     "smtp_enabled": self.smtp_client.enabled,
                     "added_to": "new",
                     "created_at": new_entry.created_at,
+                    "incoming_in_reply_to": message.in_reply_to,
+                    "incoming_references": message.references,
                 },
             )
 
@@ -168,6 +197,8 @@ class MailProcessor:
             details = {
                 "error": str(exc),
                 "message_id": message_id,
+                "incoming_in_reply_to": message.in_reply_to,
+                "incoming_references": message.references,
             }
             self.processed_storage.add(message_id, sender, MailAction.ERROR, details=details)
             return ProcessingResult(
@@ -183,9 +214,21 @@ class MailProcessor:
         message_id: str,
         assistant_name: str,
         signature: str | None,
+        incoming_message: IncomingEmail,
     ) -> ProcessingResult:
         if not self.config.behavior.send_pending_reply:
-            self.processed_storage.add(message_id, sender, MailAction.ALREADY_NEW)
+            self.processed_storage.add(
+                message_id,
+                sender,
+                MailAction.ALREADY_NEW,
+                details={
+                    "message_id": message_id,
+                    "reason": "sender already queued for review",
+                    "pending_reply_enabled": False,
+                    "incoming_in_reply_to": incoming_message.in_reply_to,
+                    "incoming_references": incoming_message.references,
+                },
+            )
             return ProcessingResult(
                 sender=sender,
                 action=MailAction.ALREADY_NEW,
@@ -201,7 +244,18 @@ class MailProcessor:
         should_send = self.contact_manager.should_send_pending_reply(sender, cooldown_hours)
 
         if not should_send:
-            self.processed_storage.add(message_id, sender, MailAction.ALREADY_NEW)
+            self.processed_storage.add(
+                message_id,
+                sender,
+                MailAction.ALREADY_NEW,
+                details={
+                    "message_id": message_id,
+                    "reason": "pending approval reply cooldown active",
+                    "cooldown_hours": cooldown_hours,
+                    "incoming_in_reply_to": incoming_message.in_reply_to,
+                    "incoming_references": incoming_message.references,
+                },
+            )
             return ProcessingResult(
                 sender=sender,
                 action=MailAction.ALREADY_NEW,
@@ -242,6 +296,8 @@ class MailProcessor:
                 "pending_reply_sent": sent,
                 "smtp_enabled": self.smtp_client.enabled,
                 "cooldown_hours": cooldown_hours,
+                "incoming_in_reply_to": incoming_message.in_reply_to,
+                "incoming_references": incoming_message.references,
             },
         )
 
@@ -263,7 +319,21 @@ class MailProcessor:
         subject = (message.subject or "").strip()
         return f"fallback:{sender}:{subject}:{utc_now_iso()}"
 
-    def _log_outbound(self, sender: str, subject: str, body: str, kind: str, sent: bool) -> None:
+    def _build_outbound_message_id(self) -> str:
+        domain = (self.config.smtp.from_email or "localhost").split("@")[-1].strip() or "localhost"
+        return f"<{uuid.uuid4().hex}@{domain}>"
+
+    def _log_outbound(
+        self,
+        sender: str,
+        subject: str,
+        body: str,
+        kind: str,
+        sent: bool,
+        message_id: str | None = None,
+        in_reply_to: str | None = None,
+        references: list[str] | None = None,
+    ) -> None:
         payload: dict[str, Any] = {
             "ts": utc_now_iso(),
             "to": sender,
@@ -271,5 +341,8 @@ class MailProcessor:
             "body": body,
             "kind": kind,
             "sent": sent,
+            "message_id": message_id,
+            "in_reply_to": in_reply_to,
+            "references": references or [],
         }
         append_jsonl(self.config.paths.outbound_log, payload)

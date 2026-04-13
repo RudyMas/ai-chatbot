@@ -24,6 +24,8 @@ class IncomingEmail:
     text_body: str
     received_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: dict[str, Any] = field(default_factory=dict)
+    in_reply_to: str | None = None
+    references: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
