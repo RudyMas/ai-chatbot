@@ -16,7 +16,7 @@ from mail.storage import (
     utc_now_iso,
 )
 from mail.templates import onboarding_body, onboarding_subject, pending_approval_body
-from mail.threading import (
+from mail.mail_threading import (
     canonicalize_subject,
     normalize_message_id,
     normalize_references,
