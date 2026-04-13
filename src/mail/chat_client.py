@@ -19,6 +19,7 @@ class ChatClient:
         body: str | None,
         contact_note: str | None = None,
         thread_context: str | None = None,
+        is_followup: bool = False,
     ) -> str:
         self._ensure_profile_selected()
 
@@ -43,6 +44,23 @@ class ChatClient:
                 f"{clean_thread_context}\n\n"
             )
 
+        if is_followup:
+            style_rules = (
+                "- This is a follow-up in an ongoing email thread.\n"
+                "- For simple follow-up questions, reply in 1 to 3 short sentences.\n"
+                "- Do not write like customer support.\n"
+                "- Do not use ceremonial or overly polished wording.\n"
+                "- Do not add generic filler like 'it is a pleasure', 'I trust this helps', or similar phrases.\n"
+                "- Do not restate the whole problem if the thread already makes it clear.\n"
+                "- Answer the latest question directly and naturally.\n"
+                "- Keep the tone friendly and human.\n"
+            )
+        else:
+            style_rules = (
+                "- This is the first reply in this email exchange.\n"
+                "- A slightly warmer and more complete reply is fine.\n"
+            )
+
         prompt = (
             f"Write a short, natural plain-text email reply as {assistant_name}.\n"
             "Rules:\n"
@@ -50,9 +68,11 @@ class ChatClient:
             "- Do not use markdown.\n"
             "- Do not write a subject line.\n"
             "- Be warm, natural, and concise.\n"
+            "- Prefer plain, everyday wording over formal assistant wording.\n"
             "- Respond to the sender's latest message directly.\n"
             "- Keep continuity with the recent email thread when it is relevant.\n"
             "- Do not repeat yourself unnecessarily if the thread already established something.\n"
+            f"{style_rules}"
             "- The contact context is private guidance only.\n"
             "- Do not assume it is factual unless the user confirms it in their message.\n"
             "- Do not reveal or reference the contact context directly.\n"

@@ -87,6 +87,7 @@ class MailProcessor:
             if self.contact_manager.is_whitelisted(sender):
                 contact_note = self.contact_manager.get_contact_note(sender, "whitelist")
                 thread_context = self._build_thread_context(message)
+                is_followup = bool(message.in_reply_to or message.references or thread_context)
 
                 reply_text = self.chat_client.build_reply(
                     sender=sender,
@@ -94,6 +95,7 @@ class MailProcessor:
                     body=message.text_body,
                     contact_note=contact_note,
                     thread_context=thread_context,
+                    is_followup=is_followup,
                 )
 
                 reply_subject = build_reply_subject(message.subject, assistant_name)
@@ -122,6 +124,7 @@ class MailProcessor:
                     "incoming_in_reply_to": message.in_reply_to,
                     "incoming_references": message.references,
                     "thread_context_used": bool(thread_context),
+                    "is_followup": is_followup,
                 }
 
                 self._log_outbound(
