@@ -29,6 +29,10 @@ class UpdateNoteIn(BaseModel):
     status: ContactStatus
     note: str | None = None
 
+class UpdateSpontaneousIn(BaseModel):
+    email: str
+    allow_spontaneous: bool
+
 def register_admin_routes(app: FastAPI, root_dir: Path) -> None:
     web_dir = root_dir / "web"
 
@@ -129,6 +133,25 @@ def register_admin_routes(app: FastAPI, root_dir: Path) -> None:
             "email": email,
             "status": payload.status,
             "note": payload.note,
+        }
+
+    @app.post("/admin/api/{profile_name}/contacts/spontaneous")
+    def admin_update_spontaneous(profile_name: str, payload: UpdateSpontaneousIn) -> dict[str, Any]:
+        cfg = _get_mail_config(profile_name)
+
+        email = normalize_email(payload.email)
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+
+        updated = _update_contact_spontaneous(cfg, email, payload.allow_spontaneous)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Whitelist contact not found")
+
+        return {
+            "ok": True,
+            "profile": profile_name,
+            "email": email,
+            "allow_spontaneous": payload.allow_spontaneous,
         }
 
     @app.get("/admin/api/{profile_name}/debug")
@@ -301,6 +324,32 @@ def _update_contact_note(
             continue
 
         row["note"] = clean_note
+        row["updated_at"] = utc_now_iso()
+        updated = True
+        break
+
+    if not updated:
+        return False
+
+    write_jsonl(path, rows)
+    return True
+
+def _update_contact_spontaneous(
+    cfg: MailConfig,
+    email: str,
+    allow_spontaneous: bool,
+) -> bool:
+    path = cfg.paths.whitelist
+    rows = read_jsonl(path)
+
+    updated = False
+
+    for row in rows:
+        row_email = normalize_email(str(row.get("email") or ""))
+        if row_email != email:
+            continue
+
+        row["allow_spontaneous"] = bool(allow_spontaneous)
         row["updated_at"] = utc_now_iso()
         updated = True
         break

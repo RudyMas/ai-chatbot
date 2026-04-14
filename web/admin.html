@@ -281,21 +281,42 @@
         const noteValue = escapeHtml(item.note || "");
 
         lines.push(`
-        <div class="note-editor">
-            <input
-                type="text"
-                value="${noteValue}"
-                placeholder="Add or edit note..."
-                data-note-input="${emailEncoded}"
-            />
-            <button
-                type="button"
-                data-action="save-note"
-                data-email="${emailEncoded}"
-                data-status="${escapeHtml(item.status)}"
-            >Save note</button>
-        </div>
-    `);
+                <div class="note-editor">
+                    <input
+                        type="text"
+                        value="${noteValue}"
+                        placeholder="Add or edit note..."
+                        data-note-input="${emailEncoded}"
+                    />
+                    <button
+                        type="button"
+                        data-action="save-note"
+                        data-email="${emailEncoded}"
+                        data-status="${escapeHtml(item.status)}"
+                    >Save note</button>
+                </div>
+            `);
+
+        if (item.status === 'whitelist') {
+            const allowSpontaneous = item.allow_spontaneous !== false;
+            lines.push(`
+                <div class="note-actions">
+                    <label>
+                        <input
+                            type="checkbox"
+                            data-spontaneous-input="${emailEncoded}"
+                            ${allowSpontaneous ? 'checked' : ''}
+                        />
+                        Allow spontaneous emails
+                    </label>
+                    <button
+                        type="button"
+                        data-action="save-spontaneous"
+                        data-email="${emailEncoded}"
+                    >Save</button>
+                </div>
+            `);
+        }
 
         return `<div class="meta-block">${lines.join('')}</div>`;
     }
@@ -420,6 +441,26 @@
                     });
                     await loadContacts();
                     setStatus(`Saved note for ${email}.`);
+                } catch (err) {
+                    setStatus(`Error: ${err.message}`);
+                }
+            });
+        });
+
+        document.querySelectorAll('[data-action="save-spontaneous"]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const email = decodeURIComponent(btn.dataset.email);
+                const input = document.querySelector(`[data-spontaneous-input="${btn.dataset.email}"]`);
+                const allow_spontaneous = input ? input.checked : true;
+
+                try {
+                    setStatus(`Saving spontaneous setting for ${email}...`);
+                    await api(`/admin/api/${encodeURIComponent(profileSelect.value)}/contacts/spontaneous`, {
+                        method: 'POST',
+                        body: JSON.stringify({email, allow_spontaneous})
+                    });
+                    await loadContacts();
+                    setStatus(`Saved spontaneous setting for ${email}.`);
                 } catch (err) {
                     setStatus(`Error: ${err.message}`);
                 }

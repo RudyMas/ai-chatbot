@@ -16,7 +16,9 @@ def onboarding_body(sender: str, assistant_name: str, signature: str | None = No
         f"Thanks for contacting {name}. Your message has been received and queued for review. "
         f"A team member may follow up after your sender address is approved.\n\n"
         f"Sender on file: {sender}\n\n"
-        f"{build_signature(signature, name)}"
+        f"{build_signature(signature, name)}\n\n"
+        f"Disclaimer:\n"
+        f"You are communicating with an AI. Its responses are generated automatically and should be taken lightly and not as factual or professional advice. While it is designed to be respectful, it is not filtered and may occasionally say things you don’t agree with. This project is meant for fun and experimentation. If something feels off or inappropriate, feel free to report it at support@young-ai.be"
     )
 
 

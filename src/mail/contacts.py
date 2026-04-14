@@ -115,29 +115,25 @@ class ContactManager:
 
         return out
 
-    def _update_new_entry(self, email: str, updates: dict[str, str | None]) -> ContactEntry | None:
-        normalized = normalize_email(email)
-        rows = read_jsonl(self.paths.new)
-        updated = False
+    def list_whitelist(self) -> list[ContactEntry]:
+        out: list[ContactEntry] = []
 
-        for row in rows:
-            row_email = row.get("email")
-            if not isinstance(row_email, str):
-                continue
+        for row in read_jsonl(self.paths.whitelist):
+            email = row.get("email")
+            created_at = row.get("created_at")
+            if isinstance(email, str):
+                out.append(
+                    ContactEntry(
+                        email=normalize_email(email),
+                        created_at=str(created_at or ""),
+                        source=str(row.get("source") or "mail_worker"),
+                        note=str(row.get("note")) if row.get("note") is not None else None,
+                        onboarding_sent_at=_clean_optional_string(row.get("onboarding_sent_at")),
+                        last_pending_reply_at=_clean_optional_string(row.get("last_pending_reply_at")),
+                    )
+                )
 
-            if normalize_email(row_email) != normalized:
-                continue
-
-            for key, value in updates.items():
-                row[key] = value
-            updated = True
-            break
-
-        if not updated:
-            return None
-
-        write_jsonl(self.paths.new, rows)
-        return self.get_new_entry(normalized)
+        return out
 
     def get_contact_row(self, email: str, status: str) -> dict[str, object] | None:
         normalized = normalize_email(email)
@@ -177,25 +173,93 @@ class ContactManager:
         text = str(note).strip()
         return text or None
 
-    def list_whitelist(self) -> list[ContactEntry]:
-        out: list[ContactEntry] = []
+    def allows_spontaneous(self, email: str) -> bool:
+        row = self.get_contact_row(email, "whitelist")
+        if not row:
+            return False
 
-        for row in read_jsonl(self.paths.whitelist):
-            email = row.get("email")
-            created_at = row.get("created_at")
-            if isinstance(email, str):
-                out.append(
-                    ContactEntry(
-                        email=normalize_email(email),
-                        created_at=str(created_at or ""),
-                        source=str(row.get("source") or "mail_worker"),
-                        note=str(row.get("note")) if row.get("note") is not None else None,
-                        onboarding_sent_at=_clean_optional_string(row.get("onboarding_sent_at")),
-                        last_pending_reply_at=_clean_optional_string(row.get("last_pending_reply_at")),
-                    )
-                )
+        value = row.get("allow_spontaneous")
+        if value is None:
+            return True
 
-        return out
+        if isinstance(value, bool):
+            return value
+
+        text = str(value).strip().lower()
+        return text in {"1", "true", "yes", "on"}
+
+    def set_allow_spontaneous(self, email: str, allowed: bool) -> dict[str, object] | None:
+        return self.update_contact_row(
+            email=email,
+            status="whitelist",
+            updates={"allow_spontaneous": bool(allowed)},
+        )
+
+    def update_contact_row(
+        self,
+        email: str,
+        status: str,
+        updates: dict[str, object],
+    ) -> dict[str, object] | None:
+        normalized = normalize_email(email)
+
+        path = None
+        if status == "new":
+            path = self.paths.new
+        elif status == "whitelist":
+            path = self.paths.whitelist
+        elif status == "blacklist":
+            path = self.paths.blacklist
+
+        if path is None:
+            return None
+
+        rows = read_jsonl(path)
+        updated = False
+
+        for row in rows:
+            row_email = row.get("email")
+            if not isinstance(row_email, str):
+                continue
+
+            if normalize_email(row_email) != normalized:
+                continue
+
+            for key, value in updates.items():
+                row[key] = value
+
+            updated = True
+            break
+
+        if not updated:
+            return None
+
+        write_jsonl(path, rows)
+        return self.get_contact_row(normalized, status)
+
+    def _update_new_entry(self, email: str, updates: dict[str, str | None]) -> ContactEntry | None:
+        normalized = normalize_email(email)
+        rows = read_jsonl(self.paths.new)
+        updated = False
+
+        for row in rows:
+            row_email = row.get("email")
+            if not isinstance(row_email, str):
+                continue
+
+            if normalize_email(row_email) != normalized:
+                continue
+
+            for key, value in updates.items():
+                row[key] = value
+            updated = True
+            break
+
+        if not updated:
+            return None
+
+        write_jsonl(self.paths.new, rows)
+        return self.get_new_entry(normalized)
 
 
 def _clean_optional_string(value: object) -> str | None:

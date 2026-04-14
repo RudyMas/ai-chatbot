@@ -995,11 +995,15 @@ class MailProcessor:
             if not sender:
                 continue
 
+            if not self.contact_manager.allows_spontaneous(sender):
+                continue
+
             eligibility = self._check_spontaneous_eligibility(sender)
             if not eligibility["eligible"]:
                 continue
 
             result = self._send_spontaneous_email(sender)
+
             if result is not None:
                 results.append(result)
                 if result.email_sent:
