@@ -72,7 +72,11 @@ class MailBehaviorSettings:
     send_pending_reply: bool = False
     pending_reply_cooldown_hours: int = 24
     signature: str | None = None
-
+    reply_cooldown_seconds: int = 120
+    rate_limit_window_hours: int = 24
+    max_replies_per_sender_in_window: int = 20
+    max_replies_per_thread_in_window: int = 10
+    max_inbound_body_chars: int = 12000
 
 @dataclass(slots=True)
 class MailConfig:
@@ -172,6 +176,11 @@ def load_mail_config(profile_name: str) -> MailConfig:
         send_pending_reply=bool(behavior_cfg.get("send_pending_reply", False)),
         pending_reply_cooldown_hours=int(behavior_cfg.get("pending_reply_cooldown_hours", 24)),
         signature=_optional_string(behavior_cfg.get("signature")),
+        reply_cooldown_seconds=int(behavior_cfg.get("reply_cooldown_seconds", 120)),
+        rate_limit_window_hours=int(behavior_cfg.get("rate_limit_window_hours", 24)),
+        max_replies_per_sender_in_window=int(behavior_cfg.get("max_replies_per_sender_in_window", 20)),
+        max_replies_per_thread_in_window=int(behavior_cfg.get("max_replies_per_thread_in_window", 10)),
+        max_inbound_body_chars=int(behavior_cfg.get("max_inbound_body_chars", 12000)),
     )
 
     return MailConfig(

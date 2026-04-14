@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 import uuid
 
@@ -71,9 +72,10 @@ class MailProcessor:
                 )
 
             thread_id = self._resolve_incoming_thread_id(message, sender, message_id)
-            self._log_inbound(message, thread_id=thread_id, resolved_message_id=message_id)
 
             if self.contact_manager.is_blacklisted(sender):
+                self._log_inbound(message, thread_id=thread_id, resolved_message_id=message_id)
+
                 self.processed_storage.add(
                     message_id,
                     sender,
@@ -93,9 +95,58 @@ class MailProcessor:
                 )
 
             if self.contact_manager.is_whitelisted(sender):
+                safety_ok, safety_details = self._check_inbound_safety(message)
+                if not safety_ok:
+                    self._log_inbound(message, thread_id=thread_id, resolved_message_id=message_id)
+
+                    details = {
+                        "message_id": message_id,
+                        "thread_id": thread_id,
+                        **safety_details,
+                    }
+                    self.processed_storage.add(
+                        message_id,
+                        sender,
+                        MailAction.IGNORED_SAFETY,
+                        details=details,
+                    )
+                    return ProcessingResult(
+                        sender=sender,
+                        action=MailAction.IGNORED_SAFETY,
+                        email_sent=False,
+                        details=details,
+                    )
+
+                rate_ok, rate_details = self._check_rate_limits(sender=sender, thread_id=thread_id)
+                if not rate_ok:
+                    self._log_inbound(message, thread_id=thread_id, resolved_message_id=message_id)
+
+                    details = {
+                        "message_id": message_id,
+                        "thread_id": thread_id,
+                        **rate_details,
+                    }
+                    self.processed_storage.add(
+                        message_id,
+                        sender,
+                        MailAction.RATE_LIMITED,
+                        details=details,
+                    )
+                    return ProcessingResult(
+                        sender=sender,
+                        action=MailAction.RATE_LIMITED,
+                        email_sent=False,
+                        details=details,
+                    )
+
                 contact_note = self.contact_manager.get_contact_note(sender, "whitelist")
+
+                # Build context from prior history only, before logging current inbound
                 thread_context = self._build_thread_context(thread_id=thread_id)
                 is_followup = bool(message.in_reply_to or message.references or thread_context)
+
+                # Log inbound after context building so first mails are not mistaken for follow-ups
+                self._log_inbound(message, thread_id=thread_id, resolved_message_id=message_id)
 
                 reply_text = self.chat_client.build_reply(
                     sender=sender,
@@ -163,6 +214,8 @@ class MailProcessor:
                 )
 
             if self.contact_manager.is_new(sender):
+                self._log_inbound(message, thread_id=thread_id, resolved_message_id=message_id)
+
                 return self._handle_existing_new_sender(
                     sender=sender,
                     message_id=message_id,
@@ -171,6 +224,8 @@ class MailProcessor:
                     incoming_message=message,
                     thread_id=thread_id,
                 )
+
+            self._log_inbound(message, thread_id=thread_id, resolved_message_id=message_id)
 
             new_entry = self.contact_manager.add_new(sender, note="auto-added from inbound email")
             subject = onboarding_subject(self.config.behavior.onboarding_subject)
@@ -470,6 +525,115 @@ class MailProcessor:
             blocks.append(recent_block)
 
         return "\n".join(blocks).strip()
+
+    def _check_inbound_safety(self, message: IncomingEmail) -> tuple[bool, dict[str, Any]]:
+        body = (message.text_body or "").strip()
+        body_len = len(body)
+        max_chars = self.config.behavior.max_inbound_body_chars
+
+        if not body:
+            return False, {
+                "reason": "empty_body",
+                "body_length": 0,
+            }
+
+        if body_len > max_chars:
+            return False, {
+                "reason": "body_too_large",
+                "body_length": body_len,
+                "max_inbound_body_chars": max_chars,
+            }
+
+        return True, {
+            "body_length": body_len,
+        }
+
+    def _check_rate_limits(self, sender: str, thread_id: str) -> tuple[bool, dict[str, Any]]:
+        now = datetime.now(timezone.utc)
+        cooldown_seconds = self.config.behavior.reply_cooldown_seconds
+        window_hours = self.config.behavior.rate_limit_window_hours
+        max_sender = self.config.behavior.max_replies_per_sender_in_window
+        max_thread = self.config.behavior.max_replies_per_thread_in_window
+
+        rows = read_jsonl(self.config.paths.outbound_log)
+        sent_rows: list[dict[str, Any]] = []
+
+        for row in rows:
+            if not bool(row.get("sent", False)):
+                continue
+            if str(row.get("kind") or "") != "whitelist_reply":
+                continue
+            sent_rows.append(row)
+
+        sender_rows = [
+            row
+            for row in sent_rows
+            if normalize_email(str(row.get("to") or "")) == sender
+        ]
+
+        thread_rows = [
+            row
+            for row in sender_rows
+            if str(row.get("thread_id") or "").strip() == thread_id
+        ]
+
+        if cooldown_seconds > 0 and sender_rows:
+            latest_ts = self._parse_row_ts(sender_rows[-1].get("ts"))
+            if latest_ts is not None:
+                delta_seconds = (now - latest_ts).total_seconds()
+                if delta_seconds < cooldown_seconds:
+                    return False, {
+                        "reason": "cooldown_active",
+                        "reply_cooldown_seconds": cooldown_seconds,
+                        "seconds_since_last_reply": int(delta_seconds),
+                    }
+
+        if window_hours > 0:
+            cutoff = now - timedelta(hours=window_hours)
+
+            sender_count = sum(
+                1 for row in sender_rows
+                if (ts := self._parse_row_ts(row.get("ts"))) is not None and ts >= cutoff
+            )
+            if sender_count >= max_sender:
+                return False, {
+                    "reason": "sender_window_limit_reached",
+                    "rate_limit_window_hours": window_hours,
+                    "max_replies_per_sender_in_window": max_sender,
+                    "sender_reply_count_in_window": sender_count,
+                }
+
+            thread_count = sum(
+                1 for row in thread_rows
+                if (ts := self._parse_row_ts(row.get("ts"))) is not None and ts >= cutoff
+            )
+            if thread_count >= max_thread:
+                return False, {
+                    "reason": "thread_window_limit_reached",
+                    "rate_limit_window_hours": window_hours,
+                    "max_replies_per_thread_in_window": max_thread,
+                    "thread_reply_count_in_window": thread_count,
+                }
+
+        return True, {
+            "reply_cooldown_seconds": cooldown_seconds,
+            "rate_limit_window_hours": window_hours,
+        }
+
+    def _parse_row_ts(self, value: Any) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+
+        return dt.astimezone(timezone.utc)
 
     def _log_outbound(
         self,
