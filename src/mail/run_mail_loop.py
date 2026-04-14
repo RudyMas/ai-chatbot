@@ -87,6 +87,16 @@ def main() -> None:
                 if config.behavior.mark_seen_after_processing:
                     imap_client.mark_seen(imap_message_id)
 
+            deferred_results = processor.process_pending_whitelist_replies()
+
+            for result in deferred_results:
+                print(
+                    f"[MAIL] sender={result.sender!r} "
+                    f"action={result.action.value} "
+                    f"email_sent={result.email_sent} "
+                    f"(deferred)"
+                )
+
         except Exception as exc:
             print(f"[MAIL ERROR] {exc}")
 

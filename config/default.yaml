@@ -107,6 +107,11 @@ email:
     chat_timeout_seconds: 30.0
     send_pending_reply: true
     pending_reply_cooldown_hours: 24
+    reply_cooldown_seconds: 120
+    rate_limit_window_hours: 24
+    max_replies_per_sender_in_window: 24
+    max_replies_per_thread_in_window: 12
+    max_inbound_body_chars: 12000
     signature: |
       Best regards,
       Jarvis

@@ -292,6 +292,220 @@ class MailProcessor:
                 details=details,
             )
 
+    def process_pending_whitelist_replies(self) -> list[ProcessingResult]:
+        results: list[ProcessingResult] = []
+
+        pending_by_sender = self._find_latest_pending_whitelist_messages()
+
+        for sender, pending in pending_by_sender.items():
+            if not self.contact_manager.is_whitelisted(sender):
+                continue
+
+            rate_ok, rate_details = self._check_rate_limits(
+                sender=sender,
+                thread_id=str(pending.get("thread_id") or "").strip(),
+            )
+            if not rate_ok:
+                message_id = str(pending.get("message_id") or "").strip()
+                thread_id = str(pending.get("thread_id") or "").strip()
+
+                details = {
+                    "message_id": message_id,
+                    "thread_id": thread_id,
+                    "deferred_first_reply": True,
+                    **rate_details,
+                }
+                self.processed_storage.add(
+                    message_id,
+                    sender,
+                    MailAction.RATE_LIMITED,
+                    details=details,
+                )
+                results.append(
+                    ProcessingResult(
+                        sender=sender,
+                        action=MailAction.RATE_LIMITED,
+                        email_sent=False,
+                        details=details,
+                    )
+                )
+                continue
+
+            result = self._reply_to_stored_inbound_message(sender, pending)
+            if result is not None:
+                results.append(result)
+
+        return results
+
+    def _find_latest_pending_whitelist_messages(self) -> dict[str, dict[str, Any]]:
+        processed_rows = read_jsonl(self.config.paths.processed)
+        inbound_rows = read_jsonl(self.config.paths.inbound_log)
+
+        added_to_new_rows = [
+            row for row in processed_rows
+            if str(row.get("action") or "") == MailAction.ADDED_TO_NEW.value
+        ]
+
+        replied_message_ids: set[str] = set()
+        for row in processed_rows:
+            action = str(row.get("action") or "")
+            if action not in {
+                MailAction.REPLIED_WHITELIST.value,
+                MailAction.DEFERRED_WHITELIST_REPLY.value,
+            }:
+                continue
+
+            details = row.get("details") or {}
+            if isinstance(details, dict):
+                original_pending_message_id = str(details.get("original_pending_message_id") or "").strip()
+                if original_pending_message_id:
+                    replied_message_ids.add(normalize_message_id(original_pending_message_id))
+
+            row_message_id = str(row.get("message_id") or "").strip()
+            if row_message_id:
+                replied_message_ids.add(normalize_message_id(row_message_id))
+
+        inbound_by_message_id: dict[str, dict[str, Any]] = {}
+        for row in inbound_rows:
+            row_message_id = normalize_message_id(str(row.get("message_id") or ""))
+            if not row_message_id:
+                continue
+            inbound_by_message_id[row_message_id] = row
+
+        latest_by_sender: dict[str, dict[str, Any]] = {}
+
+        for row in added_to_new_rows:
+            sender = normalize_email(str(row.get("sender") or ""))
+            if not sender:
+                continue
+
+            message_id = normalize_message_id(str(row.get("message_id") or ""))
+            if not message_id:
+                continue
+
+            if message_id in replied_message_ids:
+                continue
+
+            inbound = inbound_by_message_id.get(message_id)
+            if not inbound:
+                continue
+
+            ts = str(inbound.get("ts") or "")
+            existing = latest_by_sender.get(sender)
+            if existing is None or ts > str(existing.get("ts") or ""):
+                latest_by_sender[sender] = inbound
+
+        return latest_by_sender
+
+    def _reply_to_stored_inbound_message(
+        self,
+        sender: str,
+        pending: dict[str, Any],
+    ) -> ProcessingResult | None:
+        original_message_id = normalize_message_id(str(pending.get("message_id") or ""))
+        if not original_message_id:
+            return None
+
+        thread_id = str(pending.get("thread_id") or "").strip()
+        subject = str(pending.get("subject") or "").strip()
+        body = str(pending.get("body") or "").strip()
+
+        if not body:
+            details = {
+                "message_id": original_message_id,
+                "thread_id": thread_id,
+                "reason": "pending_inbound_body_missing",
+                "deferred_first_reply": True,
+            }
+            self.processed_storage.add(
+                original_message_id,
+                sender,
+                MailAction.IGNORED_SAFETY,
+                details=details,
+            )
+            return ProcessingResult(
+                sender=sender,
+                action=MailAction.IGNORED_SAFETY,
+                email_sent=False,
+                details=details,
+            )
+
+        contact_note = self.contact_manager.get_contact_note(sender, "whitelist")
+        thread_context = self._build_thread_context(thread_id=thread_id)
+        is_followup = bool(
+            normalize_message_id(str(pending.get("in_reply_to") or "")) or
+            list(pending.get("references") or []) or
+            thread_context
+        )
+
+        reply_text = self.chat_client.build_reply(
+            sender=sender,
+            subject=subject,
+            body=body,
+            contact_note=contact_note,
+            thread_context=thread_context,
+            is_followup=is_followup,
+            thread_id=thread_id,
+        )
+
+        assistant_name = self.config.smtp.from_name or self.config.behavior.chat_user
+        reply_subject = build_reply_subject(subject, assistant_name)
+        outbound_message_id = self._build_outbound_message_id()
+
+        original_raw_message_id = str(pending.get("message_id") or "").strip()
+        references = list(pending.get("references") or [])
+        if original_raw_message_id and original_raw_message_id not in references:
+            references.append(original_raw_message_id)
+
+        sent = self.smtp_client.send_plain_text(
+            to_email=sender,
+            subject=reply_subject,
+            body=reply_text,
+            message_id=outbound_message_id,
+            in_reply_to=original_raw_message_id or None,
+            references=references,
+        )
+
+        details = {
+            "message_id": original_message_id,
+            "thread_id": thread_id,
+            "smtp_enabled": self.smtp_client.enabled,
+            "reply_subject": reply_subject,
+            "outbound_message_id": outbound_message_id,
+            "in_reply_to": original_raw_message_id or None,
+            "references": references,
+            "thread_context_used": bool(thread_context),
+            "is_followup": is_followup,
+            "deferred_first_reply": True,
+            "original_pending_message_id": original_message_id,
+        }
+
+        self._log_outbound(
+            sender=sender,
+            subject=reply_subject,
+            body=reply_text,
+            kind="whitelist_reply",
+            sent=sent,
+            thread_id=thread_id,
+            message_id=outbound_message_id,
+            in_reply_to=original_raw_message_id or None,
+            references=references,
+        )
+
+        self.processed_storage.add(
+            original_message_id,
+            sender,
+            MailAction.DEFERRED_WHITELIST_REPLY,
+            details=details,
+        )
+
+        return ProcessingResult(
+            sender=sender,
+            action=MailAction.DEFERRED_WHITELIST_REPLY,
+            email_sent=sent,
+            details=details,
+        )
+
     def _handle_existing_new_sender(
         self,
         sender: str,

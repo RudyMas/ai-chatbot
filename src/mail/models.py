@@ -12,6 +12,7 @@ class MailAction(str, Enum):
     ALREADY_NEW = "already_new"
     PENDING_REPLY_SENT = "pending_reply_sent"
     REPLIED_WHITELIST = "replied_whitelist"
+    DEFERRED_WHITELIST_REPLY = "deferred_whitelist_reply"
     ALREADY_PROCESSED = "already_processed"
     RATE_LIMITED = "rate_limited"
     IGNORED_SAFETY = "ignored_safety"
