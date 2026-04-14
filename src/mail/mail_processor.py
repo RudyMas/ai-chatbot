@@ -43,12 +43,12 @@ def build_reply_subject(subject: str | None, fallback_name: str) -> str:
 
 class MailProcessor:
     def __init__(
-        self,
-        config: MailConfig,
-        contact_manager: ContactManager,
-        processed_storage: ProcessedMessageStore,
-        chat_client: ChatClient,
-        smtp_client: SMTPClient,
+            self,
+            config: MailConfig,
+            contact_manager: ContactManager,
+            processed_storage: ProcessedMessageStore,
+            chat_client: ChatClient,
+            smtp_client: SMTPClient,
     ):
         self.config = config
         self.contact_manager = contact_manager
@@ -398,9 +398,9 @@ class MailProcessor:
         return latest_by_sender
 
     def _reply_to_stored_inbound_message(
-        self,
-        sender: str,
-        pending: dict[str, Any],
+            self,
+            sender: str,
+            pending: dict[str, Any],
     ) -> ProcessingResult | None:
         original_message_id = normalize_message_id(str(pending.get("message_id") or ""))
         if not original_message_id:
@@ -507,13 +507,13 @@ class MailProcessor:
         )
 
     def _handle_existing_new_sender(
-        self,
-        sender: str,
-        message_id: str,
-        assistant_name: str,
-        signature: str | None,
-        incoming_message: IncomingEmail,
-        thread_id: str,
+            self,
+            sender: str,
+            message_id: str,
+            assistant_name: str,
+            signature: str | None,
+            incoming_message: IncomingEmail,
+            thread_id: str,
     ) -> ProcessingResult:
         if not self.config.behavior.send_pending_reply:
             self.processed_storage.add(
@@ -633,10 +633,10 @@ class MailProcessor:
         return canonicalize_subject(subject)
 
     def _resolve_incoming_thread_id(
-        self,
-        message: IncomingEmail,
-        sender: str,
-        resolved_message_id: str,
+            self,
+            message: IncomingEmail,
+            sender: str,
+            resolved_message_id: str,
     ) -> str:
         inbound_rows = read_jsonl(self.config.paths.inbound_log)
         outbound_rows = read_jsonl(self.config.paths.outbound_log)
@@ -656,11 +656,11 @@ class MailProcessor:
         )
 
     def _log_inbound(
-        self,
-        message: IncomingEmail,
-        *,
-        thread_id: str,
-        resolved_message_id: str,
+            self,
+            message: IncomingEmail,
+            *,
+            thread_id: str,
+            resolved_message_id: str,
     ) -> None:
         payload: dict[str, Any] = {
             "ts": message.received_at.isoformat(timespec="seconds"),
@@ -677,11 +677,11 @@ class MailProcessor:
         append_jsonl(self.config.paths.inbound_log, payload)
 
     def _build_thread_context(
-        self,
-        thread_id: str,
-        max_recent_messages: int = 4,
-        summary_trigger_count: int = 6,
-        summary_max_items: int = 4,
+            self,
+            thread_id: str,
+            max_recent_messages: int = 4,
+            summary_trigger_count: int = 6,
+            summary_max_items: int = 4,
     ) -> str:
         history: list[dict[str, Any]] = []
 
@@ -850,16 +850,16 @@ class MailProcessor:
         return dt.astimezone(timezone.utc)
 
     def _log_outbound(
-        self,
-        sender: str,
-        subject: str,
-        body: str,
-        kind: str,
-        sent: bool,
-        thread_id: str,
-        message_id: str | None = None,
-        in_reply_to: str | None = None,
-        references: list[str] | None = None,
+            self,
+            sender: str,
+            subject: str,
+            body: str,
+            kind: str,
+            sent: bool,
+            thread_id: str,
+            message_id: str | None = None,
+            in_reply_to: str | None = None,
+            references: list[str] | None = None,
     ) -> None:
         payload: dict[str, Any] = {
             "ts": utc_now_iso(),
@@ -889,9 +889,9 @@ class MailProcessor:
         return "\n".join(lines).strip()
 
     def _summarize_history(
-        self,
-        history: list[dict[str, Any]],
-        max_items: int = 4,
+            self,
+            history: list[dict[str, Any]],
+            max_items: int = 4,
     ) -> str:
         if not history:
             return ""
@@ -970,3 +970,211 @@ class MailProcessor:
             value = value[: max_len - 3].rstrip() + "..."
 
         return value
+
+    def process_spontaneous_emails(self) -> list[ProcessingResult]:
+        results: list[ProcessingResult] = []
+
+        if not self.config.behavior.spontaneous_enabled:
+            return results
+
+        contacts = self.contact_manager.list_whitelist()
+        if not contacts:
+            return results
+
+        max_per_cycle = max(0, self.config.behavior.spontaneous_max_per_cycle)
+        if max_per_cycle <= 0:
+            return results
+
+        sent_count = 0
+
+        for contact in contacts:
+            if sent_count >= max_per_cycle:
+                break
+
+            sender = normalize_email(contact.email)
+            if not sender:
+                continue
+
+            eligibility = self._check_spontaneous_eligibility(sender)
+            if not eligibility["eligible"]:
+                continue
+
+            result = self._send_spontaneous_email(sender)
+            if result is not None:
+                results.append(result)
+                if result.email_sent:
+                    sent_count += 1
+
+        return results
+
+    def _check_spontaneous_eligibility(self, sender: str) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        min_hours_since_contact = self.config.behavior.spontaneous_min_hours_since_contact
+        sender_cooldown_hours = self.config.behavior.spontaneous_sender_cooldown_hours
+
+        inbound_rows = read_jsonl(self.config.paths.inbound_log)
+        outbound_rows = read_jsonl(self.config.paths.outbound_log)
+
+        sender_inbound = [
+            row for row in inbound_rows
+            if normalize_email(str(row.get("from") or "")) == sender
+        ]
+        sender_outbound = [
+            row for row in outbound_rows
+            if normalize_email(str(row.get("to") or "")) == sender
+        ]
+
+        last_contact_dt: datetime | None = None
+        for row in sender_inbound + sender_outbound:
+            ts = self._parse_row_ts(row.get("ts"))
+            if ts is None:
+                continue
+            if last_contact_dt is None or ts > last_contact_dt:
+                last_contact_dt = ts
+
+        if last_contact_dt is not None:
+            hours_since_contact = (now - last_contact_dt).total_seconds() / 3600
+            if hours_since_contact < min_hours_since_contact:
+                return {
+                    "eligible": False,
+                    "reason": "recent_contact",
+                    "hours_since_contact": round(hours_since_contact, 2),
+                }
+
+        spontaneous_rows = [
+            row for row in sender_outbound
+            if str(row.get("kind") or "") == "spontaneous"
+        ]
+
+        last_spontaneous_dt: datetime | None = None
+        for row in spontaneous_rows:
+            ts = self._parse_row_ts(row.get("ts"))
+            if ts is None:
+                continue
+            if last_spontaneous_dt is None or ts > last_spontaneous_dt:
+                last_spontaneous_dt = ts
+
+        if last_spontaneous_dt is not None:
+            hours_since_spontaneous = (now - last_spontaneous_dt).total_seconds() / 3600
+            if hours_since_spontaneous < sender_cooldown_hours:
+                return {
+                    "eligible": False,
+                    "reason": "spontaneous_cooldown",
+                    "hours_since_spontaneous": round(hours_since_spontaneous, 2),
+                }
+
+        return {
+            "eligible": True,
+        }
+
+    def _send_spontaneous_email(self, sender: str) -> ProcessingResult | None:
+        contact_note = self.contact_manager.get_contact_note(sender, "whitelist")
+        recent_context = self._build_recent_contact_context(sender)
+
+        subject = self._build_spontaneous_subject(sender, recent_context)
+        thread_id = self._build_spontaneous_thread_id(sender)
+
+        body = self.chat_client.build_spontaneous_email(
+            sender=sender,
+            contact_note=contact_note,
+            recent_context=recent_context,
+            thread_id=thread_id,
+        )
+
+        outbound_message_id = self._build_outbound_message_id()
+
+        sent = self.smtp_client.send_plain_text(
+            to_email=sender,
+            subject=subject,
+            body=body,
+            message_id=outbound_message_id,
+        )
+
+        self._log_outbound(
+            sender=sender,
+            subject=subject,
+            body=body,
+            kind="spontaneous",
+            sent=sent,
+            thread_id=thread_id,
+            message_id=outbound_message_id,
+            in_reply_to=None,
+            references=[],
+        )
+
+        details = {
+            "thread_id": thread_id,
+            "smtp_enabled": self.smtp_client.enabled,
+            "reply_subject": subject,
+            "outbound_message_id": outbound_message_id,
+            "spontaneous": True,
+            "recent_context_used": bool(recent_context),
+        }
+
+        synthetic_message_id = f"spontaneous:{sender}:{utc_now_iso()}".lower()
+        self.processed_storage.add(
+            synthetic_message_id,
+            sender,
+            MailAction.REPLIED_WHITELIST,
+            details=details,
+        )
+
+        return ProcessingResult(
+            sender=sender,
+            action=MailAction.REPLIED_WHITELIST,
+            email_sent=sent,
+            details=details,
+        )
+
+    def _build_recent_contact_context(self, sender: str, max_items: int = 4) -> str:
+        history: list[dict[str, Any]] = []
+
+        for row in read_jsonl(self.config.paths.inbound_log):
+            if normalize_email(str(row.get("from") or "")) != sender:
+                continue
+            history.append(
+                {
+                    "ts": str(row.get("ts") or ""),
+                    "role": "sender",
+                    "text": str(row.get("body") or "").strip(),
+                }
+            )
+
+        for row in read_jsonl(self.config.paths.outbound_log):
+            if normalize_email(str(row.get("to") or "")) != sender:
+                continue
+            history.append(
+                {
+                    "ts": str(row.get("ts") or ""),
+                    "role": "assistant",
+                    "text": str(row.get("body") or "").strip(),
+                }
+            )
+
+        history.sort(key=lambda item: item.get("ts") or "")
+        history = [item for item in history if item.get("text")]
+        history = history[-max_items:]
+
+        return self._format_history_lines(history)
+
+    def _build_spontaneous_subject(self, sender: str, recent_context: str) -> str:
+        first_name = self._extract_name_from_email(sender)
+
+        if recent_context:
+            return f"Just checking in, {first_name}" if first_name else "Just checking in"
+
+        return f"A quick hello, {first_name}" if first_name else "A quick hello"
+
+    def _build_spontaneous_thread_id(self, sender: str) -> str:
+        seed = f"spontaneous:{self.config.profile_name}:{sender}:{utc_now_iso()[:10]}"
+        return f"thr_spontaneous_{abs(hash(seed))}"
+
+    def _extract_name_from_email(self, sender: str) -> str:
+        email = (sender or "").strip()
+        local = email.split("@", 1)[0] if "@" in email else email
+        local = local.replace(".", " ").replace("_", " ").replace("-", " ")
+        parts = [part.strip() for part in local.split() if part.strip()]
+        if not parts:
+            return ""
+        first = parts[0]
+        return first[:1].upper() + first[1:]

@@ -177,6 +177,26 @@ class ContactManager:
         text = str(note).strip()
         return text or None
 
+    def list_whitelist(self) -> list[ContactEntry]:
+        out: list[ContactEntry] = []
+
+        for row in read_jsonl(self.paths.whitelist):
+            email = row.get("email")
+            created_at = row.get("created_at")
+            if isinstance(email, str):
+                out.append(
+                    ContactEntry(
+                        email=normalize_email(email),
+                        created_at=str(created_at or ""),
+                        source=str(row.get("source") or "mail_worker"),
+                        note=str(row.get("note")) if row.get("note") is not None else None,
+                        onboarding_sent_at=_clean_optional_string(row.get("onboarding_sent_at")),
+                        last_pending_reply_at=_clean_optional_string(row.get("last_pending_reply_at")),
+                    )
+                )
+
+        return out
+
 
 def _clean_optional_string(value: object) -> str | None:
     if value is None:

@@ -97,6 +97,16 @@ def main() -> None:
                     f"(deferred)"
                 )
 
+            spontaneous_results = processor.process_spontaneous_emails()
+
+            for result in spontaneous_results:
+                print(
+                    f"[MAIL] sender={result.sender!r} "
+                    f"action={result.action.value} "
+                    f"email_sent={result.email_sent} "
+                    f"(spontaneous)"
+                )
+
         except Exception as exc:
             print(f"[MAIL ERROR] {exc}")
 

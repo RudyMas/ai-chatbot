@@ -237,3 +237,78 @@ class ChatClient:
             value = value[3:-3].strip()
 
         return value
+
+    def build_spontaneous_email(
+        self,
+        sender: str,
+        contact_note: str | None = None,
+        recent_context: str | None = None,
+        thread_id: str | None = None,
+    ) -> str:
+        self._ensure_profile_selected()
+
+        clean_sender = (sender or "").strip()
+        assistant_name = (self.user_name or "Assistant").strip()
+        clean_thread_id = (thread_id or "").strip() or "spontaneous"
+
+        clean_note = " ".join((contact_note or "").split()).strip()
+        clean_recent_context = (recent_context or "").strip()
+
+        context_block = ""
+        if clean_note:
+            context_block += (
+                "Contact context:\n"
+                f"- Admin note for this sender: {clean_note}\n\n"
+            )
+
+        if clean_recent_context:
+            context_block += (
+                "Recent contact context:\n"
+                f"{clean_recent_context}\n\n"
+            )
+
+        prompt = (
+            f"Write a short, natural plain-text email that {assistant_name} sends proactively to the contact.\n"
+            "Rules:\n"
+            "- Reply in plain text only.\n"
+            "- Do not use markdown.\n"
+            "- Do not write a subject line.\n"
+            "- Output only the email body itself.\n"
+            "- Keep it friendly, light, and natural.\n"
+            "- This is a spontaneous message, not a reply to a direct question.\n"
+            "- Give a believable reason to write, such as following up on a past topic, checking in, or sharing a brief thought.\n"
+            "- Do not sound needy, clingy, or overly emotional.\n"
+            "- Do not mention being lonely, bored, or waiting.\n"
+            "- Do not promise future monitoring or actions unless explicitly true.\n"
+            "- Keep it concise: usually 3 to 8 sentences.\n"
+            "- Avoid generic filler and avoid sounding like marketing copy.\n"
+            "- The contact context is private guidance only.\n"
+            "- Do not reveal or mention the contact context directly.\n"
+            "- Prefer referencing something specific the user said earlier if possible.\n"
+            "- Use it only to adjust tone or relevance.\n\n"
+            f"{context_block}"
+            f"Recipient: {clean_sender}\n"
+            "Write the spontaneous email now."
+        )
+
+        session_name = self._build_safe_session(clean_sender, clean_thread_id)
+
+        payload = {
+            "message": prompt,
+            "user": assistant_name,
+            "session": session_name,
+        }
+
+        response = requests.post(
+            self._chat_url(),
+            json=payload,
+            timeout=self.timeout_seconds,
+        )
+        response.raise_for_status()
+
+        data = response.json()
+        answer = data.get("answer")
+        if not isinstance(answer, str) or not answer.strip():
+            raise ValueError("/chat response missing text answer")
+
+        return self._clean_reply_text(answer)
