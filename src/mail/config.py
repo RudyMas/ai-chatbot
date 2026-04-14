@@ -7,7 +7,7 @@ from typing import Any
 
 from bot.profiles import load_profile
 
-ROOT = Path(__file__).parents[0]
+ROOT = Path(__file__).parents[2]
 
 
 @dataclass(slots=True)
