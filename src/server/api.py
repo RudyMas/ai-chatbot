@@ -385,6 +385,16 @@ def chat(inp: ChatIn):
     try:
         answer = generate_chat(history_slice, final_user, app_cfg, str(TEMPLATE_PATH))
         answer = normalize_quotes(answer)
+
+        if not isinstance(answer, str):
+            raise HTTPException(status_code=502, detail="LLM returned a non-string answer")
+
+        answer = answer.strip()
+        if not answer:
+            raise HTTPException(status_code=502, detail="LLM returned an empty answer")
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

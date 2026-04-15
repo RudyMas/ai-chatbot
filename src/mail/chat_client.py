@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import requests
+import time
 
 
 @dataclass(slots=True)
@@ -115,19 +116,44 @@ class ChatClient:
             "session": session_name,
         }
 
-        response = requests.post(
-            self._chat_url(),
-            json=payload,
-            timeout=self.timeout_seconds,
-        )
-        response.raise_for_status()
+        max_attempts = 3
+        last_error: str | None = None
 
-        data = response.json()
-        answer = data.get("answer")
-        if not isinstance(answer, str) or not answer.strip():
-            raise ValueError("/chat response missing text answer")
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = requests.post(
+                    self._chat_url(),
+                    json=payload,
+                    timeout=self.timeout_seconds,
+                )
+                response.raise_for_status()
 
-        return self._clean_reply_text(answer)
+                try:
+                    data = response.json()
+                except Exception as exc:
+                    raise ValueError(f"/chat returned invalid JSON: {exc}")
+
+                answer = data.get("answer")
+                if not isinstance(answer, str):
+                    available_keys = sorted(data.keys()) if isinstance(data, dict) else []
+                    raise ValueError(
+                        f"/chat response missing text answer; keys={available_keys}; body={data!r}"
+                    )
+
+                cleaned = self._clean_reply_text(answer)
+                if cleaned:
+                    return cleaned
+
+                raise ValueError(f"/chat returned empty answer; body={data!r}")
+
+            except Exception as exc:
+                last_error = str(exc)
+
+                if attempt < max_attempts:
+                    time.sleep(0.75 * attempt)
+                    continue
+
+        raise ValueError(f"/chat failed after {max_attempts} attempts: {last_error}")
 
     def _ensure_profile_selected(self) -> None:
         response = requests.post(
@@ -299,16 +325,42 @@ class ChatClient:
             "session": session_name,
         }
 
-        response = requests.post(
-            self._chat_url(),
-            json=payload,
-            timeout=self.timeout_seconds,
-        )
-        response.raise_for_status()
+        max_attempts = 3
+        last_error: str | None = None
 
-        data = response.json()
-        answer = data.get("answer")
-        if not isinstance(answer, str) or not answer.strip():
-            raise ValueError("/chat response missing text answer")
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = requests.post(
+                    self._chat_url(),
+                    json=payload,
+                    timeout=self.timeout_seconds,
+                )
+                response.raise_for_status()
 
-        return self._clean_reply_text(answer)
+                try:
+                    data = response.json()
+                except Exception as exc:
+                    raise ValueError(f"/chat returned invalid JSON: {exc}")
+
+                answer = data.get("answer")
+                if not isinstance(answer, str):
+                    available_keys = sorted(data.keys()) if isinstance(data, dict) else []
+                    raise ValueError(
+                        f"/chat response missing text answer; keys={available_keys}; body={data!r}"
+                    )
+
+                cleaned = self._clean_reply_text(answer)
+                if cleaned:
+                    return cleaned
+
+                raise ValueError(f"/chat returned empty answer; body={data!r}")
+
+            except Exception as exc:
+                last_error = str(exc)
+
+                if attempt < max_attempts:
+                    print(f"[MAIL CHAT RETRY] attempt={attempt} sender={clean_sender!r} reason={exc}")
+                    time.sleep(0.75 * attempt)
+                    continue
+
+        raise ValueError(f"/chat failed after {max_attempts} attempts: {last_error}")
