@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from email.message import EmailMessage
+from email.utils import formataddr
 import smtplib
 from typing import Optional
 
@@ -40,27 +41,32 @@ class SMTPClient:
 
         message = EmailMessage()
 
-        if self.from_name:
-            message["From"] = f"{self.from_name} <{self.from_email}>"
+        clean_from_email = self._clean_header_value(self.from_email) or ""
+        clean_from_name = self._clean_header_value(self.from_name)
+
+        if clean_from_name:
+            message["From"] = formataddr((clean_from_name, clean_from_email))
         else:
-            message["From"] = self.from_email
+            message["From"] = clean_from_email
 
-        message["To"] = to_email
-        message["Subject"] = subject
+        message["To"] = self._clean_header_value(to_email) or ""
+        message["Subject"] = self._clean_header_value(subject) or "(no subject)"
 
-        if message_id:
-            message["Message-ID"] = message_id
+        clean_message_id = self._clean_single_header_token(message_id)
+        if clean_message_id:
+            message["Message-ID"] = clean_message_id
 
-        if in_reply_to:
-            message["In-Reply-To"] = in_reply_to
+        clean_in_reply_to = self._clean_single_header_token(in_reply_to)
+        if clean_in_reply_to:
+            message["In-Reply-To"] = clean_in_reply_to
 
-        if references:
-            clean_refs = [r.strip() for r in references if isinstance(r, str) and r.strip()]
-            if clean_refs:
-                message["References"] = " ".join(clean_refs)
+        clean_refs = self._clean_header_tokens(references)
+        if clean_refs:
+            message["References"] = " ".join(clean_refs)
 
-        if reply_to:
-            message["Reply-To"] = reply_to
+        clean_reply_to = self._clean_header_value(reply_to)
+        if clean_reply_to:
+            message["Reply-To"] = clean_reply_to
 
         message.set_content(clean_body)
 
@@ -87,3 +93,33 @@ class SMTPClient:
         except Exception as exc:
             print(f"[SMTP ERROR] Failed to send email to {to_email}: {exc}")
             return False
+
+    def _clean_header_value(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        cleaned = " ".join(str(value).replace("\r", " ").replace("\n", " ").split()).strip()
+        return cleaned or None
+
+    def _clean_single_header_token(self, value: str | None) -> str | None:
+        cleaned = self._clean_header_value(value)
+        if not cleaned:
+            return None
+
+        return cleaned.split()[0]
+
+    def _clean_header_tokens(self, values: Optional[list[str]]) -> list[str]:
+        if not values:
+            return []
+
+        out: list[str] = []
+        seen: set[str] = set()
+
+        for value in values:
+            cleaned = self._clean_single_header_token(value)
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            out.append(cleaned)
+
+        return out

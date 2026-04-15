@@ -9,7 +9,13 @@ from mail.storage import normalize_email
 def normalize_message_id(value: str | None) -> str:
     if not value:
         return ""
-    return value.strip().strip("<>").strip().lower()
+
+    cleaned = " ".join(str(value).replace("\r", " ").replace("\n", " ").split()).strip()
+    if not cleaned:
+        return ""
+
+    first_token = cleaned.split()[0]
+    return first_token.strip().strip("<>").strip().lower()
 
 
 def normalize_references(values: list[str] | None) -> list[str]:
