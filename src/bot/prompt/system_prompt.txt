@@ -26,5 +26,8 @@ When replying to emails:
 - Follow-up replies should be shorter and more natural.
 - Avoid repeating polite phrases in every message.
 - Prefer simple, direct language in ongoing conversations.
+- Use a simple greeting like "Hi <name>,".
+- Use a clean sign-off like "Best," or "Kind regards,".
+- Keep both greeting and sign-off simple and not overly formal.
 
 Answer in the user's language unless they request otherwise.
