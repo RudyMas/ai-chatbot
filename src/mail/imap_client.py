@@ -6,6 +6,7 @@ from email import message_from_bytes
 from email.message import Message
 from email.utils import parsedate_to_datetime, parseaddr
 import imaplib
+import time
 from typing import Iterable
 
 from mail.models import IncomingEmail
@@ -285,3 +286,28 @@ class IMAPClient:
         text = re.sub(r"\n{3,}", "\n\n", text)
 
         return text.strip()
+
+    def append_message(
+        self,
+        mailbox: str,
+        raw_message: bytes,
+        flags: str = "\\Seen",
+    ) -> None:
+        clean_mailbox = (mailbox or "").strip()
+        if not clean_mailbox:
+            raise ValueError("mailbox is required for IMAP append")
+
+        if not raw_message:
+            raise ValueError("raw_message is required for IMAP append")
+
+        with self._connect() as client:
+            typ, response = client.append(
+                clean_mailbox,
+                flags,
+                imaplib.Time2Internaldate(time.time()),
+                raw_message,
+            )
+            if typ != "OK":
+                raise RuntimeError(
+                    f"Failed to append message to mailbox {clean_mailbox!r}: {response!r}"
+                )

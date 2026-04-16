@@ -88,6 +88,8 @@ email:
     mailbox: "INBOX"
     use_ssl: true
     poll_interval_seconds: 60
+    save_sent_messages: true
+    sent_mailbox: INBOX.Sent
 
   smtp:
     host: "send.one.com"

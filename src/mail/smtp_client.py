@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from email.message import EmailMessage
+from email.policy import SMTP
 from email.utils import formataddr
 import smtplib
 from typing import Optional
@@ -31,10 +32,55 @@ class SMTPClient:
         message_id: Optional[str] = None,
         in_reply_to: Optional[str] = None,
         references: Optional[list[str]] = None,
-    ) -> bool:
+    ) -> tuple[bool, bytes | None]:
         if not self.enabled:
-            return False
+            return False, None
 
+        try:
+            message = self.build_plain_text_message(
+                to_email=to_email,
+                subject=subject,
+                body=body,
+                reply_to=reply_to,
+                message_id=message_id,
+                in_reply_to=in_reply_to,
+                references=references,
+            )
+            raw_message = message.as_bytes(policy=SMTP)
+
+            if self.use_ssl:
+                smtp = smtplib.SMTP_SSL(self.host, self.port, timeout=20)
+            else:
+                smtp = smtplib.SMTP(self.host, self.port, timeout=20)
+
+            with smtp:
+                smtp.ehlo()
+
+                if self.use_tls and not self.use_ssl:
+                    smtp.starttls()
+                    smtp.ehlo()
+
+                if self.username:
+                    smtp.login(self.username, self.password or "")
+
+                smtp.send_message(message)
+
+            return True, raw_message
+
+        except Exception as exc:
+            print(f"[SMTP ERROR] Failed to send email to {to_email}: {exc}")
+            return False, None
+
+    def build_plain_text_message(
+        self,
+        to_email: str,
+        subject: str,
+        body: str,
+        reply_to: Optional[str] = None,
+        message_id: Optional[str] = None,
+        in_reply_to: Optional[str] = None,
+        references: Optional[list[str]] = None,
+    ) -> EmailMessage:
         clean_body = (body or "").strip()
         if not clean_body:
             clean_body = "(empty response)"
@@ -69,30 +115,7 @@ class SMTPClient:
             message["Reply-To"] = clean_reply_to
 
         message.set_content(clean_body)
-
-        try:
-            if self.use_ssl:
-                smtp = smtplib.SMTP_SSL(self.host, self.port, timeout=20)
-            else:
-                smtp = smtplib.SMTP(self.host, self.port, timeout=20)
-
-            with smtp:
-                smtp.ehlo()
-
-                if self.use_tls and not self.use_ssl:
-                    smtp.starttls()
-                    smtp.ehlo()
-
-                if self.username:
-                    smtp.login(self.username, self.password or "")
-
-                smtp.send_message(message)
-
-            return True
-
-        except Exception as exc:
-            print(f"[SMTP ERROR] Failed to send email to {to_email}: {exc}")
-            return False
+        return message
 
     def _clean_header_value(self, value: str | None) -> str | None:
         if value is None:

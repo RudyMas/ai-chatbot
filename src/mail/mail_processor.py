@@ -165,7 +165,7 @@ class MailProcessor:
                 if message.message_id and message.message_id not in thread_references:
                     thread_references.append(message.message_id)
 
-                sent = self.smtp_client.send_plain_text(
+                sent, raw_message = self.smtp_client.send_plain_text(
                     to_email=sender,
                     subject=reply_subject,
                     body=reply_text,
@@ -173,6 +173,8 @@ class MailProcessor:
                     in_reply_to=message.message_id,
                     references=thread_references,
                 )
+
+                self._store_sent_message(raw_message, sent)
 
                 details = {
                     "message_id": message_id,
@@ -231,11 +233,13 @@ class MailProcessor:
             subject = onboarding_subject(self.config.behavior.onboarding_subject)
             body = onboarding_body(sender, assistant_name, signature)
 
-            sent = self.smtp_client.send_plain_text(
+            sent, raw_message = self.smtp_client.send_plain_text(
                 to_email=sender,
                 subject=subject,
                 body=body,
             )
+
+            self._store_sent_message(raw_message, sent)
 
             self._log_outbound(
                 sender=sender,
@@ -457,7 +461,7 @@ class MailProcessor:
         if original_raw_message_id and original_raw_message_id not in references:
             references.append(original_raw_message_id)
 
-        sent = self.smtp_client.send_plain_text(
+        sent, raw_message = self.smtp_client.send_plain_text(
             to_email=sender,
             subject=reply_subject,
             body=reply_text,
@@ -465,6 +469,8 @@ class MailProcessor:
             in_reply_to=original_raw_message_id or None,
             references=references,
         )
+
+        self._store_sent_message(raw_message, sent)
 
         details = {
             "message_id": original_message_id,
@@ -573,11 +579,13 @@ class MailProcessor:
         subject = onboarding_subject(self.config.behavior.onboarding_subject)
         body = pending_approval_body(sender, assistant_name, signature)
 
-        sent = self.smtp_client.send_plain_text(
+        sent, raw_message = self.smtp_client.send_plain_text(
             to_email=sender,
             subject=subject,
             body=body,
         )
+
+        self._store_sent_message(raw_message, sent)
 
         self._log_outbound(
             sender=sender,
@@ -1087,12 +1095,14 @@ class MailProcessor:
 
         outbound_message_id = self._build_outbound_message_id()
 
-        sent = self.smtp_client.send_plain_text(
+        sent, raw_message = self.smtp_client.send_plain_text(
             to_email=sender,
             subject=subject,
             body=body,
             message_id=outbound_message_id,
         )
+
+        self._store_sent_message(raw_message, sent)
 
         self._log_outbound(
             sender=sender,
@@ -1182,3 +1192,32 @@ class MailProcessor:
             return ""
         first = parts[0]
         return first[:1].upper() + first[1:]
+
+    def _store_sent_message(self, raw_message: bytes | None, sent: bool) -> None:
+        if not sent:
+            return
+
+        if not raw_message:
+            return
+
+        if not self.config.imap.save_sent_messages:
+            return
+
+        sent_mailbox = (self.config.imap.sent_mailbox or "").strip()
+        if not sent_mailbox:
+            return
+
+        try:
+            from mail.imap_client import IMAPClient
+
+            imap_client = IMAPClient(
+                host=self.config.imap.host,
+                port=self.config.imap.port,
+                username=self.config.imap.username,
+                password=self.config.imap.password,
+                mailbox=self.config.imap.mailbox,
+                use_ssl=self.config.imap.use_ssl,
+            )
+            imap_client.append_message(sent_mailbox, raw_message)
+        except Exception as exc:
+            print(f"[MAIL SENT APPEND ERROR] mailbox={sent_mailbox!r} reason={exc}")
