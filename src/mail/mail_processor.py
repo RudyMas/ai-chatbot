@@ -140,6 +140,7 @@ class MailProcessor:
                     )
 
                 contact_note = self.contact_manager.get_contact_note(sender, "whitelist")
+                memory_user = self.contact_manager.resolve_chat_user(sender, "whitelist")
 
                 # Build context from prior history only, before logging current inbound
                 thread_context = self._build_thread_context(thread_id=thread_id)
@@ -153,6 +154,7 @@ class MailProcessor:
                     subject=message.subject,
                     body=message.text_body,
                     contact_note=contact_note,
+                    memory_user=memory_user,
                     thread_context=thread_context,
                     is_followup=is_followup,
                     thread_id=thread_id,
@@ -435,6 +437,7 @@ class MailProcessor:
             )
 
         contact_note = self.contact_manager.get_contact_note(sender, "whitelist")
+        memory_user = self.contact_manager.resolve_chat_user(sender, "whitelist")
         thread_context = self._build_thread_context(thread_id=thread_id)
         is_followup = bool(
             normalize_message_id(str(pending.get("in_reply_to") or "")) or
@@ -447,6 +450,7 @@ class MailProcessor:
             subject=subject,
             body=body,
             contact_note=contact_note,
+            memory_user=memory_user,
             thread_context=thread_context,
             is_followup=is_followup,
             thread_id=thread_id,
@@ -1081,6 +1085,7 @@ class MailProcessor:
 
     def _send_spontaneous_email(self, sender: str) -> ProcessingResult | None:
         contact_note = self.contact_manager.get_contact_note(sender, "whitelist")
+        memory_user = self.contact_manager.resolve_chat_user(sender, "whitelist")
         recent_context = self._build_recent_contact_context(sender)
 
         subject = self._build_spontaneous_subject(sender, recent_context)
@@ -1089,6 +1094,7 @@ class MailProcessor:
         body = self.chat_client.build_spontaneous_email(
             sender=sender,
             contact_note=contact_note,
+            memory_user=memory_user,
             recent_context=recent_context,
             thread_id=thread_id,
         )

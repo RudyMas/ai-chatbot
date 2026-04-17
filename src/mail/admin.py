@@ -29,6 +29,11 @@ class UpdateNoteIn(BaseModel):
     status: ContactStatus
     note: str | None = None
 
+class UpdateUsernameIn(BaseModel):
+    email: str
+    status: ContactStatus
+    username: str | None = None
+
 class UpdateSpontaneousIn(BaseModel):
     email: str
     allow_spontaneous: bool
@@ -154,6 +159,26 @@ def register_admin_routes(app: FastAPI, root_dir: Path) -> None:
             "allow_spontaneous": payload.allow_spontaneous,
         }
 
+    @app.post("/admin/api/{profile_name}/contacts/username")
+    def admin_update_username(profile_name: str, payload: UpdateUsernameIn) -> dict[str, Any]:
+        cfg = _get_mail_config(profile_name)
+
+        email = normalize_email(payload.email)
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+
+        updated = _update_contact_username(cfg, email, payload.status, payload.username)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Contact not found")
+
+        return {
+            "ok": True,
+            "profile": profile_name,
+            "email": email,
+            "status": payload.status,
+            "username": payload.username,
+        }
+
     @app.get("/admin/api/{profile_name}/debug")
     def admin_debug(profile_name: str) -> dict[str, Any]:
         cfg = _get_mail_config(profile_name)
@@ -223,6 +248,7 @@ def _list_contacts(cfg: MailConfig, status: ContactStatus) -> list[dict[str, Any
         item.setdefault("created_at", row.get("created_at"))
         item.setdefault("source", row.get("source"))
         item.setdefault("note", row.get("note"))
+        item.setdefault("username", row.get("username"))
         item.setdefault("onboarding_sent_at", row.get("onboarding_sent_at"))
         item.setdefault("last_pending_reply_at", row.get("last_pending_reply_at"))
         item.setdefault("updated_at", row.get("updated_at"))
@@ -324,6 +350,34 @@ def _update_contact_note(
             continue
 
         row["note"] = clean_note
+        row["updated_at"] = utc_now_iso()
+        updated = True
+        break
+
+    if not updated:
+        return False
+
+    write_jsonl(path, rows)
+    return True
+
+def _update_contact_username(
+    cfg: MailConfig,
+    email: str,
+    status: ContactStatus,
+    username: str | None,
+) -> bool:
+    path = _path_for_status(cfg, status)
+    rows = read_jsonl(path)
+
+    updated = False
+    clean_username = (username or "").strip() or None
+
+    for row in rows:
+        row_email = normalize_email(str(row.get("email") or ""))
+        if row_email != email:
+            continue
+
+        row["username"] = clean_username
         row["updated_at"] = utc_now_iso()
         updated = True
         break

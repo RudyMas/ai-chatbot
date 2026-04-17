@@ -19,6 +19,7 @@ class ChatClient:
         subject: str | None,
         body: str | None,
         contact_note: str | None = None,
+        memory_user: str | None = None,
         thread_context: str | None = None,
         is_followup: bool = False,
         thread_id: str | None = None,
@@ -29,6 +30,7 @@ class ChatClient:
         clean_subject = (subject or "").strip() or "(no subject)"
         clean_body = (body or "").strip() or "(empty message)"
         assistant_name = (self.user_name or "Assistant").strip()
+        clean_memory_user = (memory_user or "").strip() or clean_sender or "User"
         clean_thread_id = (thread_id or "").strip() or "no-thread"
 
         clean_note = " ".join((contact_note or "").split()).strip()
@@ -112,11 +114,11 @@ class ChatClient:
 
         payload = {
             "message": prompt,
-            "user": assistant_name,
+            "user": clean_memory_user,
             "session": session_name,
         }
 
-        max_attempts = 3
+        max_attempts = 10
         last_error: str | None = None
 
         for attempt in range(1, max_attempts + 1):
@@ -150,7 +152,7 @@ class ChatClient:
                 last_error = str(exc)
 
                 if attempt < max_attempts:
-                    time.sleep(0.75 * attempt)
+                    time.sleep(1 * attempt)
                     continue
 
         raise ValueError(f"/chat failed after {max_attempts} attempts: {last_error}")
@@ -268,6 +270,7 @@ class ChatClient:
         self,
         sender: str,
         contact_note: str | None = None,
+        memory_user: str | None = None,
         recent_context: str | None = None,
         thread_id: str | None = None,
     ) -> str:
@@ -275,6 +278,7 @@ class ChatClient:
 
         clean_sender = (sender or "").strip()
         assistant_name = (self.user_name or "Assistant").strip()
+        clean_memory_user = (memory_user or "").strip() or clean_sender or "User"
         clean_thread_id = (thread_id or "").strip() or "spontaneous"
 
         clean_note = " ".join((contact_note or "").split()).strip()
@@ -321,11 +325,11 @@ class ChatClient:
 
         payload = {
             "message": prompt,
-            "user": assistant_name,
+            "user": clean_memory_user,
             "session": session_name,
         }
 
-        max_attempts = 3
+        max_attempts = 10
         last_error: str | None = None
 
         for attempt in range(1, max_attempts + 1):
@@ -360,7 +364,7 @@ class ChatClient:
 
                 if attempt < max_attempts:
                     print(f"[MAIL CHAT RETRY] attempt={attempt} sender={clean_sender!r} reason={exc}")
-                    time.sleep(0.75 * attempt)
+                    time.sleep(1 * attempt)
                     continue
 
         raise ValueError(f"/chat failed after {max_attempts} attempts: {last_error}")
