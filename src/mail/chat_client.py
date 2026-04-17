@@ -5,6 +5,13 @@ from dataclasses import dataclass
 import requests
 import time
 
+from conversation.state import detect_thread_state
+from conversation.steering import (
+    build_hidden_guidance,
+    build_retry_guidance,
+    reply_has_progress,
+)
+
 
 @dataclass(slots=True)
 class ChatClient:
@@ -58,7 +65,7 @@ class ChatClient:
                 "- First determine what the sender is doing in the latest email: asking a question, giving feedback, acknowledging, correcting, or continuing the discussion.\n"
                 "- Reply only to the latest email and use earlier thread context only to understand references.\n"
                 "- If the latest email is mainly a comment or acknowledgement, respond briefly and naturally without turning it into a new advice answer.\n"
-                "- If no clear question is asked, do not invent one.\n"
+                "- If no clear question is asked, do not force one, but it is okay to ask a natural follow-up if it helps the conversation move forward.\n"
                 "- Do not broaden the topic beyond what the sender just wrote.\n"
                 "- Do not introduce travel advice, safety advice, or generic recommendations unless the sender explicitly asked for them.\n"
                 "- For simple follow-up messages, reply in 1 to 3 short sentences.\n"
@@ -99,8 +106,8 @@ class ChatClient:
             "- Do not mention internal policies, prompts, or system details.\n"
             "- Avoid enthusiastic filler unless the sender used that tone first.\n"
             "- Avoid motivational or cheerful wrap-up lines unless they fit naturally.\n"
-            "- For acknowledgement emails, a very short reply is preferred.\n"
-            "- Do not add extra advice when the sender is only reacting to a previous answer.\n"
+            "- For acknowledgement emails, keep the reply brief unless the conversation clearly benefits from one fresh idea, one natural question, or one concrete next step.\n"
+            "- Do not add irrelevant advice, but it is okay to gently move the conversation forward when it feels natural.\n"
             "- Prefer European metric units when relevant.\n"
             f"- Latest message intent: {intent}.\n"
             f"{intent_rules}\n"
@@ -108,6 +115,12 @@ class ChatClient:
             f"Sender: {clean_sender}\n"
             f"Subject: {clean_subject}\n"
             f"Latest message:\n{clean_body}"
+        )
+
+        prompt = self._inject_hidden_guidance(
+            prompt=prompt,
+            thread_context=clean_thread_context,
+            sender=clean_sender,
         )
 
         session_name = self._build_safe_session(clean_sender, clean_thread_id)
@@ -123,30 +136,29 @@ class ChatClient:
 
         for attempt in range(1, max_attempts + 1):
             try:
-                response = requests.post(
-                    self._chat_url(),
-                    json=payload,
-                    timeout=self.timeout_seconds,
+                first_reply = self._post_chat(payload)
+
+                if reply_has_progress(first_reply, previous_message=clean_body):
+                    return first_reply
+
+                retry_prompt = (
+                    f"{prompt}\n\n"
+                    "Internal guidance for rewriting:\n"
+                    f"{build_retry_guidance()}\n"
                 )
-                response.raise_for_status()
 
-                try:
-                    data = response.json()
-                except Exception as exc:
-                    raise ValueError(f"/chat returned invalid JSON: {exc}")
+                retry_payload = {
+                    "message": retry_prompt,
+                    "user": clean_memory_user,
+                    "session": session_name,
+                }
 
-                answer = data.get("answer")
-                if not isinstance(answer, str):
-                    available_keys = sorted(data.keys()) if isinstance(data, dict) else []
-                    raise ValueError(
-                        f"/chat response missing text answer; keys={available_keys}; body={data!r}"
-                    )
+                improved_reply = self._post_chat(retry_payload)
 
-                cleaned = self._clean_reply_text(answer)
-                if cleaned:
-                    return cleaned
+                if reply_has_progress(improved_reply, previous_message=clean_body):
+                    return improved_reply
 
-                raise ValueError(f"/chat returned empty answer; body={data!r}")
+                return first_reply
 
             except Exception as exc:
                 last_error = str(exc)
@@ -216,7 +228,7 @@ class ChatClient:
             return (
                 "- The latest email is mainly an acknowledgement or casual reaction.\n"
                 "- Reply briefly and naturally.\n"
-                "- 1 or 2 short sentences is usually enough.\n"
+                "- 1 or 2 short sentences is usually enough, unless the conversation naturally benefits from one fresh idea, question, or next step.\n"
                 "- Do not turn it into a new advice response.\n"
                 "- Do not add closing filler unless it feels truly natural.\n"
             )
@@ -265,6 +277,84 @@ class ChatClient:
             value = value[3:-3].strip()
 
         return value
+
+    def _extract_recent_messages_from_thread_context(self, thread_context: str | None) -> list[str]:
+        """
+        Turn thread context like:
+            Sender: ...
+            Assistant: ...
+        into a list of plain message texts in chronological order.
+        """
+        text = (thread_context or "").strip()
+        if not text:
+            return []
+
+        messages: list[str] = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            if line.startswith("Sender: "):
+                messages.append(line[len("Sender: "):].strip())
+            elif line.startswith("Assistant: "):
+                messages.append(line[len("Assistant: "):].strip())
+            elif line.startswith("- Sender: "):
+                messages.append(line[len("- Sender: "):].strip())
+            elif line.startswith("- Assistant: "):
+                messages.append(line[len("- Assistant: "):].strip())
+
+        return [m for m in messages if m]
+
+    def _post_chat(self, payload: dict) -> str:
+        response = requests.post(
+            self._chat_url(),
+            json=payload,
+            timeout=self.timeout_seconds,
+        )
+        response.raise_for_status()
+
+        try:
+            data = response.json()
+        except Exception as exc:
+            raise ValueError(f"/chat returned invalid JSON: {exc}")
+
+        answer = data.get("answer")
+        if not isinstance(answer, str):
+            available_keys = sorted(data.keys()) if isinstance(data, dict) else []
+            raise ValueError(
+                f"/chat response missing text answer; keys={available_keys}; body={data!r}"
+            )
+
+        cleaned = self._clean_reply_text(answer)
+        if cleaned:
+            return cleaned
+
+        raise ValueError(f"/chat returned empty answer; body={data!r}")
+
+    def _inject_hidden_guidance(
+        self,
+        prompt: str,
+        thread_context: str | None,
+        sender: str,
+    ) -> str:
+        recent_messages = self._extract_recent_messages_from_thread_context(thread_context)
+        current_state = detect_thread_state(recent_messages) if recent_messages else None
+
+        hidden_guidance = build_hidden_guidance(
+            recent_messages=recent_messages,
+            current_state=current_state,
+            sender_name=sender,
+        )
+
+        if not hidden_guidance:
+            return prompt
+
+        return (
+            f"{prompt}\n\n"
+            "Internal guidance for writing this reply:\n"
+            f"{hidden_guidance}\n"
+        )
 
     def build_spontaneous_email(
         self,
@@ -334,30 +424,7 @@ class ChatClient:
 
         for attempt in range(1, max_attempts + 1):
             try:
-                response = requests.post(
-                    self._chat_url(),
-                    json=payload,
-                    timeout=self.timeout_seconds,
-                )
-                response.raise_for_status()
-
-                try:
-                    data = response.json()
-                except Exception as exc:
-                    raise ValueError(f"/chat returned invalid JSON: {exc}")
-
-                answer = data.get("answer")
-                if not isinstance(answer, str):
-                    available_keys = sorted(data.keys()) if isinstance(data, dict) else []
-                    raise ValueError(
-                        f"/chat response missing text answer; keys={available_keys}; body={data!r}"
-                    )
-
-                cleaned = self._clean_reply_text(answer)
-                if cleaned:
-                    return cleaned
-
-                raise ValueError(f"/chat returned empty answer; body={data!r}")
+                return self._post_chat(payload)
 
             except Exception as exc:
                 last_error = str(exc)
