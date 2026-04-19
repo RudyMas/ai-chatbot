@@ -31,6 +31,8 @@ logging:
 
 rag:
   enabled: true
+
+  # Settings for memory management
   store_path: "data/rag/default_store.jsonl"
   chunk_messages: 4
   summary_max_words: 120
@@ -38,6 +40,7 @@ rag:
   require_user_match: true
   global_tags: ["global"]
 
+  # Settings for retrieving memory
   debug_retriever: false
   top_k: 6
   max_note_words: 60
@@ -56,7 +59,7 @@ audio:
     enabled: false
     backend: "kokoro"                # "piper" or "kokoro"
     # Setting for Piper
-    voice: "en_US-bryce-medium"    # file basename (without .onnx)
+    voice: "en_US-bryce-medium"      # file basename (without .onnx)
     model_dir: "./models/piper"      # contains <voice>.onnx and <voice>.onnx.json
     sample_rate: 22050
     # Setting for Kokoro
