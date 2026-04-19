@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import random
 from typing import Any
 import uuid
 
@@ -140,6 +141,7 @@ class MailProcessor:
                     )
 
                 contact_note = self.contact_manager.get_contact_note(sender, "whitelist")
+                memory_user = self.contact_manager.resolve_chat_user(sender, "whitelist")
 
                 # Build context from prior history only, before logging current inbound
                 thread_context = self._build_thread_context(thread_id=thread_id)
@@ -153,6 +155,7 @@ class MailProcessor:
                     subject=message.subject,
                     body=message.text_body,
                     contact_note=contact_note,
+                    memory_user=memory_user,
                     thread_context=thread_context,
                     is_followup=is_followup,
                     thread_id=thread_id,
@@ -165,7 +168,7 @@ class MailProcessor:
                 if message.message_id and message.message_id not in thread_references:
                     thread_references.append(message.message_id)
 
-                sent = self.smtp_client.send_plain_text(
+                sent, raw_message = self.smtp_client.send_plain_text(
                     to_email=sender,
                     subject=reply_subject,
                     body=reply_text,
@@ -173,6 +176,8 @@ class MailProcessor:
                     in_reply_to=message.message_id,
                     references=thread_references,
                 )
+
+                self._store_sent_message(raw_message, sent)
 
                 details = {
                     "message_id": message_id,
@@ -231,11 +236,13 @@ class MailProcessor:
             subject = onboarding_subject(self.config.behavior.onboarding_subject)
             body = onboarding_body(sender, assistant_name, signature)
 
-            sent = self.smtp_client.send_plain_text(
+            sent, raw_message = self.smtp_client.send_plain_text(
                 to_email=sender,
                 subject=subject,
                 body=body,
             )
+
+            self._store_sent_message(raw_message, sent)
 
             self._log_outbound(
                 sender=sender,
@@ -431,6 +438,7 @@ class MailProcessor:
             )
 
         contact_note = self.contact_manager.get_contact_note(sender, "whitelist")
+        memory_user = self.contact_manager.resolve_chat_user(sender, "whitelist")
         thread_context = self._build_thread_context(thread_id=thread_id)
         is_followup = bool(
             normalize_message_id(str(pending.get("in_reply_to") or "")) or
@@ -443,6 +451,7 @@ class MailProcessor:
             subject=subject,
             body=body,
             contact_note=contact_note,
+            memory_user=memory_user,
             thread_context=thread_context,
             is_followup=is_followup,
             thread_id=thread_id,
@@ -457,7 +466,7 @@ class MailProcessor:
         if original_raw_message_id and original_raw_message_id not in references:
             references.append(original_raw_message_id)
 
-        sent = self.smtp_client.send_plain_text(
+        sent, raw_message = self.smtp_client.send_plain_text(
             to_email=sender,
             subject=reply_subject,
             body=reply_text,
@@ -465,6 +474,8 @@ class MailProcessor:
             in_reply_to=original_raw_message_id or None,
             references=references,
         )
+
+        self._store_sent_message(raw_message, sent)
 
         details = {
             "message_id": original_message_id,
@@ -573,11 +584,13 @@ class MailProcessor:
         subject = onboarding_subject(self.config.behavior.onboarding_subject)
         body = pending_approval_body(sender, assistant_name, signature)
 
-        sent = self.smtp_client.send_plain_text(
+        sent, raw_message = self.smtp_client.send_plain_text(
             to_email=sender,
             subject=subject,
             body=body,
         )
+
+        self._store_sent_message(raw_message, sent)
 
         self._log_outbound(
             sender=sender,
@@ -1073,6 +1086,7 @@ class MailProcessor:
 
     def _send_spontaneous_email(self, sender: str) -> ProcessingResult | None:
         contact_note = self.contact_manager.get_contact_note(sender, "whitelist")
+        memory_user = self.contact_manager.resolve_chat_user(sender, "whitelist")
         recent_context = self._build_recent_contact_context(sender)
 
         subject = self._build_spontaneous_subject(sender, recent_context)
@@ -1081,18 +1095,21 @@ class MailProcessor:
         body = self.chat_client.build_spontaneous_email(
             sender=sender,
             contact_note=contact_note,
+            memory_user=memory_user,
             recent_context=recent_context,
             thread_id=thread_id,
         )
 
         outbound_message_id = self._build_outbound_message_id()
 
-        sent = self.smtp_client.send_plain_text(
+        sent, raw_message = self.smtp_client.send_plain_text(
             to_email=sender,
             subject=subject,
             body=body,
             message_id=outbound_message_id,
         )
+
+        self._store_sent_message(raw_message, sent)
 
         self._log_outbound(
             sender=sender,
@@ -1163,11 +1180,64 @@ class MailProcessor:
 
     def _build_spontaneous_subject(self, sender: str, recent_context: str) -> str:
         first_name = self._extract_name_from_email(sender)
+        has_context = bool((recent_context or "").strip())
 
-        if recent_context:
-            return f"Just checking in, {first_name}" if first_name else "Just checking in"
+        if first_name:
+            if has_context:
+                options = [
+                    f"Quick follow-up, {first_name}",
+                    f"Just checking in, {first_name}",
+                    f"Thinking of you, {first_name}",
+                    f"A small update for you, {first_name}",
+                    f"Wanted to continue our chat, {first_name}",
+                    f"Still on my mind, {first_name}",
+                    f"Picking this back up, {first_name}",
+                    f"One more thought, {first_name}",
+                    f"Back to our conversation, {first_name}",
+                    f"A quick note for you, {first_name}",
+                ]
+            else:
+                options = [
+                    f"A quick hello, {first_name}",
+                    f"Hi {first_name}, just saying hello",
+                    f"A little check-in, {first_name}",
+                    f"Hope your day is going well, {first_name}",
+                    f"Sending a quick note, {first_name}",
+                    f"Thinking about you, {first_name}",
+                    f"Just dropping in, {first_name}",
+                    f"A friendly hello, {first_name}",
+                    f"A short message for you, {first_name}",
+                    f"Waving hello, {first_name}",
+                ]
+        else:
+            if has_context:
+                options = [
+                    "Quick follow-up",
+                    "Just checking in",
+                    "Thinking of you",
+                    "A small update for you",
+                    "Wanted to continue our chat",
+                    "Still on my mind",
+                    "Picking this back up",
+                    "One more thought",
+                    "Back to our conversation",
+                    "A quick note for you",
+                ]
+            else:
+                options = [
+                    "A quick hello",
+                    "Just saying hello",
+                    "A little check-in",
+                    "Hope your day is going well",
+                    "Sending a quick note",
+                    "Thinking about you",
+                    "Just dropping in",
+                    "A friendly hello",
+                    "A short message for you",
+                    "Waving hello",
+                ]
 
-        return f"A quick hello, {first_name}" if first_name else "A quick hello"
+        return random.choice(options)
 
     def _build_spontaneous_thread_id(self, sender: str) -> str:
         seed = f"spontaneous:{self.config.profile_name}:{sender}:{utc_now_iso()[:10]}"
@@ -1182,3 +1252,32 @@ class MailProcessor:
             return ""
         first = parts[0]
         return first[:1].upper() + first[1:]
+
+    def _store_sent_message(self, raw_message: bytes | None, sent: bool) -> None:
+        if not sent:
+            return
+
+        if not raw_message:
+            return
+
+        if not self.config.imap.save_sent_messages:
+            return
+
+        sent_mailbox = (self.config.imap.sent_mailbox or "").strip()
+        if not sent_mailbox:
+            return
+
+        try:
+            from mail.imap_client import IMAPClient
+
+            imap_client = IMAPClient(
+                host=self.config.imap.host,
+                port=self.config.imap.port,
+                username=self.config.imap.username,
+                password=self.config.imap.password,
+                mailbox=self.config.imap.mailbox,
+                use_ssl=self.config.imap.use_ssl,
+            )
+            imap_client.append_message(sent_mailbox, raw_message)
+        except Exception as exc:
+            print(f"[MAIL SENT APPEND ERROR] mailbox={sent_mailbox!r} reason={exc}")
