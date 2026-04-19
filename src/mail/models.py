@@ -37,6 +37,7 @@ class ContactEntry:
     created_at: str
     source: str = "mail_worker"
     note: str | None = None
+    username: str | None = None
     onboarding_sent_at: str | None = None
     last_pending_reply_at: str | None = None
 

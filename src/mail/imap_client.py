@@ -6,6 +6,7 @@ from email import message_from_bytes
 from email.message import Message
 from email.utils import parsedate_to_datetime, parseaddr
 import imaplib
+import time
 from typing import Iterable
 
 from mail.models import IncomingEmail
@@ -97,7 +98,7 @@ class IMAPClient:
         message_id = self._resolve_message_id(msg, sender_email, subject, imap_message_id)
         received_at = self._extract_received_at(msg)
 
-        in_reply_to = (msg.get("In-Reply-To") or "").strip() or None
+        in_reply_to = self._extract_single_message_id(msg.get("In-Reply-To"))
         references = self._extract_message_id_list(msg.get("References"))
 
         metadata = {
@@ -225,18 +226,42 @@ class IMAPClient:
         except Exception:
             return value.strip()
 
+    def _unfold_header_value(self, raw_value: str | None) -> str:
+        if not raw_value:
+            return ""
+
+        return " ".join(str(raw_value).replace("\r", " ").replace("\n", " ").split()).strip()
+
+    def _extract_single_message_id(self, raw_value: str | None) -> str | None:
+        text = self._unfold_header_value(raw_value)
+        if not text:
+            return None
+
+        parts = text.split()
+        return parts[0] if parts else None
+
     def _extract_message_id_list(self, raw_value: str | None) -> list[str]:
         if not raw_value:
             return []
 
         import re
 
-        matches = re.findall(r"<[^>]+>", raw_value)
-        if matches:
-            return [m.strip() for m in matches if m.strip()]
+        text = self._unfold_header_value(raw_value)
+        if not text:
+            return []
 
-        text = raw_value.strip()
-        return [text] if text else []
+        parts = [part.strip() for part in re.split(r"[\s,]+", text) if part.strip()]
+
+        out: list[str] = []
+        seen: set[str] = set()
+
+        for part in parts:
+            if part in seen:
+                continue
+            seen.add(part)
+            out.append(part)
+
+        return out
 
     def _html_to_text(self, html: str) -> str:
         """
@@ -261,3 +286,28 @@ class IMAPClient:
         text = re.sub(r"\n{3,}", "\n\n", text)
 
         return text.strip()
+
+    def append_message(
+        self,
+        mailbox: str,
+        raw_message: bytes,
+        flags: str = "\\Seen",
+    ) -> None:
+        clean_mailbox = (mailbox or "").strip()
+        if not clean_mailbox:
+            raise ValueError("mailbox is required for IMAP append")
+
+        if not raw_message:
+            raise ValueError("raw_message is required for IMAP append")
+
+        with self._connect() as client:
+            typ, response = client.append(
+                clean_mailbox,
+                flags,
+                imaplib.Time2Internaldate(time.time()),
+                raw_message,
+            )
+            if typ != "OK":
+                raise RuntimeError(
+                    f"Failed to append message to mailbox {clean_mailbox!r}: {response!r}"
+                )

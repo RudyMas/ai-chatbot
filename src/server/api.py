@@ -192,11 +192,12 @@ def _build_retriever(user_name: Optional[str]):
         require_user_match=require_user_match,
         global_tags=rag_cfg.get("global_tags", []),
     )
+    debug_retriever = bool(rag_cfg.get("debug_retriever", False))
     top_k = int(rag_cfg.get("top_k", 3))
     max_note_words = int(rag_cfg.get("max_note_words", 60))
     min_score = float(rag_cfg.get("min_score", 0.0))
     fallback_recent = int(rag_cfg.get("fallback_recent", 0))
-    return retr, top_k, max_note_words, min_score, fallback_recent
+    return retr, top_k, max_note_words, min_score, fallback_recent, debug_retriever
 
 
 def _get_session_buffer(name: str) -> SessionBuffer:
@@ -366,9 +367,41 @@ def chat(inp: ChatIn):
     # Normal chat flow
     notes: List[str] = []
     if rag_cfg.get("enabled", True):
-        retr, top_k, max_note_words, min_score, fallback_recent = _build_retriever(user_name)
-        notes = retr.top_k_notes(norm_user, top_k, max_note_words, min_score=min_score,
-                                 fallback_recent=fallback_recent)
+        retr, top_k, max_note_words, min_score, fallback_recent, debug_retriever = _build_retriever(user_name)
+        notes = retr.top_k_notes(
+            norm_user,
+            top_k,
+            max_note_words,
+            min_score=min_score,
+            fallback_recent=fallback_recent
+        )
+
+        if debug_retriever:
+            # 🔍 DEBUG: print RAG retrieval
+            print("\n=== RAG DEBUG ===")
+            print(f"[SOURCE] session={sess}")
+            print(f"QUERY: {norm_user!r}")
+            print(f"USER: {user_name}")
+            print(f"TOP_K: {top_k}, MIN_SCORE: {min_score}")
+
+            if not notes:
+                print("NO NOTES RETRIEVED")
+            else:
+                for i, n in enumerate(notes, 1):
+                    try:
+                        # If your retriever includes score
+                        score = getattr(n, "score", None)
+                        if score is not None:
+                            print(f"\n[{i}] SCORE: {score:.4f}")
+                        else:
+                            print(f"\n[{i}]")
+
+                        text = getattr(n, "text", str(n))
+                        print(text[:300])  # limit output size
+                    except Exception as e:
+                        print(f"[{i}] ERROR PRINTING NOTE: {e}")
+
+            print("=== END RAG DEBUG ===\n")
 
     user_line = f"{user_name}: {norm_user}"
     final_user = _context_block(notes) + user_line
@@ -385,6 +418,16 @@ def chat(inp: ChatIn):
     try:
         answer = generate_chat(history_slice, final_user, app_cfg, str(TEMPLATE_PATH))
         answer = normalize_quotes(answer)
+
+        if not isinstance(answer, str):
+            raise HTTPException(status_code=502, detail="LLM returned a non-string answer")
+
+        answer = answer.strip()
+        if not answer:
+            raise HTTPException(status_code=502, detail="LLM returned an empty answer")
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

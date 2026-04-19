@@ -43,6 +43,8 @@ class IMAPSettings:
     mailbox: str = "INBOX"
     use_ssl: bool = True
     poll_interval_seconds: int = 60
+    sent_mailbox: str = "INBOX/Sent"
+    save_sent_messages: bool = False
 
 
 @dataclass(slots=True)
@@ -159,6 +161,8 @@ def load_mail_config(profile_name: str) -> MailConfig:
         mailbox=str(imap_cfg.get("mailbox", "INBOX")),
         use_ssl=bool(imap_cfg.get("use_ssl", True)),
         poll_interval_seconds=int(imap_cfg.get("poll_interval_seconds", 60)),
+        sent_mailbox=str(imap_cfg.get("sent_mailbox", "INBOX/Sent")),
+        save_sent_messages=bool(imap_cfg.get("save_sent_messages", False)),
     )
 
     smtp = SMTPSettings(

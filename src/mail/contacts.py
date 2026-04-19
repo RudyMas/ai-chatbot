@@ -45,13 +45,19 @@ class ContactManager:
                 created_at=created_at,
                 source=str(row.get("source") or "mail_worker"),
                 note=str(row.get("note")) if row.get("note") is not None else None,
+                username=_clean_optional_string(row.get("username")),
                 onboarding_sent_at=_clean_optional_string(row.get("onboarding_sent_at")),
                 last_pending_reply_at=_clean_optional_string(row.get("last_pending_reply_at")),
             )
 
         return None
 
-    def add_new(self, email: str, note: str | None = None) -> ContactEntry:
+    def add_new(
+        self,
+        email: str,
+        note: str | None = None,
+        username: str | None = None,
+    ) -> ContactEntry:
         existing = self.get_new_entry(email)
         if existing is not None:
             return existing
@@ -61,6 +67,7 @@ class ContactManager:
             created_at=utc_now_iso(),
             source="unknown_sender",
             note=note,
+            username=_clean_optional_string(username),
         )
         append_jsonl(self.paths.new, asdict(entry))
         return entry
@@ -108,6 +115,7 @@ class ContactManager:
                         created_at=created_at,
                         source=str(row.get("source") or "mail_worker"),
                         note=str(row.get("note")) if row.get("note") is not None else None,
+                        username=_clean_optional_string(row.get("username")),
                         onboarding_sent_at=_clean_optional_string(row.get("onboarding_sent_at")),
                         last_pending_reply_at=_clean_optional_string(row.get("last_pending_reply_at")),
                     )
@@ -128,6 +136,7 @@ class ContactManager:
                         created_at=str(created_at or ""),
                         source=str(row.get("source") or "mail_worker"),
                         note=str(row.get("note")) if row.get("note") is not None else None,
+                        username=_clean_optional_string(row.get("username")),
                         onboarding_sent_at=_clean_optional_string(row.get("onboarding_sent_at")),
                         last_pending_reply_at=_clean_optional_string(row.get("last_pending_reply_at")),
                     )
@@ -172,6 +181,21 @@ class ContactManager:
 
         text = str(note).strip()
         return text or None
+
+    def get_contact_username(self, email: str, status: str) -> str | None:
+        row = self.get_contact_row(email, status)
+        if not row:
+            return None
+
+        return _clean_optional_string(row.get("username"))
+
+    def resolve_chat_user(self, email: str, status: str) -> str:
+        username = self.get_contact_username(email, status)
+        if username:
+            return username
+
+        normalized = normalize_email(email)
+        return normalized or "User"
 
     def allows_spontaneous(self, email: str) -> bool:
         row = self.get_contact_row(email, "whitelist")

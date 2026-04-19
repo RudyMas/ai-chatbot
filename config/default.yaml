@@ -38,10 +38,8 @@ rag:
   require_user_match: true
   global_tags: ["global"]
 
-retriever:
-  enabled: true
-  store_path: "data/rag/default_store.jsonl"
-  top_k: 4
+  debug_retriever: false
+  top_k: 6
   max_note_words: 60
   require_tags: []
   min_score: 0.04
@@ -88,6 +86,8 @@ email:
     mailbox: "INBOX"
     use_ssl: true
     poll_interval_seconds: 60
+    save_sent_messages: true
+    sent_mailbox: INBOX.Sent
 
   smtp:
     host: "send.one.com"

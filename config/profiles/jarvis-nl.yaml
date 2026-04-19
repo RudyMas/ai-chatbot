@@ -38,10 +38,8 @@ rag:
   require_user_match: true
   global_tags: ["global"]
 
-retriever:
-  enabled: true
-  store_path: "data/rag/jarvis-nl_store.jsonl"
-  top_k: 4
+  debug_retriever: false
+  top_k: 6
   max_note_words: 60
   require_tags: []
   min_score: 0.04
